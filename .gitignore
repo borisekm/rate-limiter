@@ -1,0 +1,31 @@
+# Build output
+target/
+build/
+*.class
+
+# Maven
+.mvn/timing.properties
+
+# Gradle
+.gradle/
+
+# Visual Studio Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# IDE metadata
+.idea/
+*.iml
+
+# Logs and local configuration
+*.log
+.env
+application-local.properties
+application-local.yml
+
+# Operating system files
+.DS_Store
+Thumbs.db

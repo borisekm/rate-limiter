@@ -1,0 +1,77 @@
+openapi: 3.0.3
+info:
+  title: Rate Limiter API
+  description: Distributed token-bucket rate limiter for internal microservices.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: RateLimit
+
+paths:
+  /v1/rate/check:
+    post:
+      tags: [RateLimit]
+      operationId: checkRate
+      summary: Consume tokens for a key and report whether the call is allowed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRateRequest'
+      responses:
+        '200':
+          description: Call is allowed; tokens have been consumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckRateResponse'
+        '429':
+          description: Limit exceeded; no tokens consumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckRateResponse'
+        '400':
+          description: Invalid request
+
+components:
+  schemas:
+    CheckRateRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Identifies the bucket, e.g. "orders-service:/v1/export" or "tenant-42"
+          example: orders-service:/v1/export
+        tokens:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+          description: Number of tokens this call costs
+
+    CheckRateResponse:
+      type: object
+      required: [allowed, limit, remaining, retryAfterMillis]
+      properties:
+        allowed:
+          type: boolean
+        limit:
+          type: integer
+          format: int64
+          description: Bucket capacity (max burst)
+        remaining:
+          type: integer
+          format: int64
+          description: Whole tokens left in the bucket after this call
+        retryAfterMillis:
+          type: integer
+          format: int64
+          description: When not allowed, how long until enough tokens are available; 0 otherwise

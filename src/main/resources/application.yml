@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: rate-limiter
+  cache:
+    type: infinispan    # required for the starter to create the EmbeddedCacheManager bean;
+                         # we still talk to the cache directly rather than via @Cacheable
+
+server:
+  port: 8051
+
+ratelimiter:
+  capacity: 100             # max burst (tokens in a full bucket)
+  refill-per-second: 100    # sustained rate -> 100 req/s
+  bucket-max-idle-millis: 60000   # idle buckets are dropped from the cache after this
+
+infinispan:
+  embedded:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
