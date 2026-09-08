@@ -42,20 +42,17 @@ components:
   schemas:
     CheckRateRequest:
       type: object
-      required: [key]
+      required: [identifier, resource]
       properties:
-        key:
+        identifier:
           type: string
           minLength: 1
-          maxLength: 256
-          description: Identifies the bucket, e.g. "orders-service:/v1/export" or "tenant-42"
-          example: orders-service:/v1/export
-        tokens:
-          type: integer
-          format: int32
-          minimum: 1
-          default: 1
-          description: Number of tokens this call costs
+          maxLength: 512
+        resource:
+          type: string
+          enum: [subjectSearch, newCases, maxCallsIp, maxCallsSess]
+          minLength: 1
+          maxLength: 512
 
     CheckRateResponse:
       type: object
