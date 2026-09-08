@@ -144,6 +144,12 @@ the file and point DNS_PING at the headless service:
 JGroups binds port 7800 and takes the next free one when it is busy, so several nodes can share a
 host (`ISPN000079` in the log names the port a node actually took).
 
+The two-node tests use `src/test/resources/jgroups-test-tcpping.xml` instead - the same TCP stack with
+static loopback discovery - because MPING binds whichever site-local address comes first, and on a
+machine with a VPN or a VMware/Hyper-V adapter that is a virtual NIC multicast never crosses. There
+the nodes would each form a cluster of one and the shared-limit tests would fail for reasons that have
+nothing to do with the code.
+
 A bucket lives on whichever nodes its key hashes to, which is usually not the node handling the
 request. All mutation therefore goes through `cache.compute()`, which ships `ConsumeTokens` to the
 key's **primary owner** and runs it there - that is what makes refill-and-consume atomic across the

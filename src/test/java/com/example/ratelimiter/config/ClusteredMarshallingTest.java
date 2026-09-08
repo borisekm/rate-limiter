@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Two nodes in one JVM, wired with the real {@link InfinispanConfig}. Buckets and the
@@ -25,6 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ClusteredMarshallingTest {
 
     private static final Resource RESOURCE = Resource.SUBJECT_SEARCH;
+
+    /**
+     * Static loopback discovery instead of the bundled stack's multicast: on a machine whose first
+     * site-local address belongs to a VPN or VMware/Hyper-V adapter, MPING finds nothing and the two
+     * nodes each form a cluster of one, failing this test for reasons that have nothing to do with it.
+     */
+    static final String TEST_JGROUPS_STACK = "jgroups-test-tcpping.xml";
 
     @TempDir
     private Path storeRoot;
@@ -51,12 +59,26 @@ class ClusteredMarshallingTest {
         nodeB = startNode(clusterName, "node-b");
         limiterA = new RateLimiter(nodeA, props, clock);
         limiterB = new RateLimiter(nodeB, props, clock);
+        awaitOneClusterOfTwo();
+    }
+
+    /**
+     * Fails with the actual cause when the nodes do not find each other, rather than leaving the test
+     * body to report a puzzling "expected false but was true" - each node would then have its own
+     * bucket and every shared-limit assertion would be wrong for a reason invisible in the message.
+     */
+    private void awaitOneClusterOfTwo() {
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(nodeA.getMembers())
+                        .as("nodes did not form one cluster - discovery failed, see %s", TEST_JGROUPS_STACK)
+                        .hasSize(2)
+                        .isEqualTo(nodeB.getMembers()));
     }
 
     private DefaultCacheManager startNode(String clusterName, String nodeDirectory) {
         InfinispanConfig config =
                 new InfinispanConfig(clusterName, storeRoot.resolve(nodeDirectory).toString(), true,
-                        "default-configs/default-jgroups-tcp.xml");
+                        TEST_JGROUPS_STACK);
         DefaultCacheManager manager = new DefaultCacheManager(config.globalConfigurer().getGlobalConfiguration());
         config.bucketsCacheConfigurer(props).configureCache(manager);
         return manager;

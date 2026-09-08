@@ -54,7 +54,8 @@ class PersistenceRestartTest {
 
     /** Starts a node against the store directory, as a fresh process would. */
     private RateLimiter start() {
-        InfinispanConfig config = new InfinispanConfig(clusterName, storeLocation.toString(), true, "default-configs/default-jgroups-tcp.xml");
+        InfinispanConfig config = new InfinispanConfig(clusterName, storeLocation.toString(), true,
+                ClusteredMarshallingTest.TEST_JGROUPS_STACK);
         node = new DefaultCacheManager(config.globalConfigurer().getGlobalConfiguration());
         config.bucketsCacheConfigurer(props).configureCache(node);
         return new RateLimiter(node, props, clock);
@@ -121,7 +122,8 @@ class PersistenceRestartTest {
 
     @Test
     void bucketsAreGoneWhenTheStoreIsDisabled() {
-        InfinispanConfig config = new InfinispanConfig(clusterName, storeLocation.toString(), false, "default-configs/default-jgroups-tcp.xml");
+        InfinispanConfig config = new InfinispanConfig(clusterName, storeLocation.toString(), false,
+                ClusteredMarshallingTest.TEST_JGROUPS_STACK);
         node = new DefaultCacheManager(config.globalConfigurer().getGlobalConfiguration());
         config.bucketsCacheConfigurer(props).configureCache(node);
         RateLimiter before = new RateLimiter(node, props, clock);

@@ -76,6 +76,14 @@ node, stops it, and starts another against the same directory - the only cover f
 deploy. Both need their own `ratelimiter.cluster-name` and a `@TempDir` store location, or they join a
 locally running instance and hang in state transfer.
 
+Both also run on `src/test/resources/jgroups-test-tcpping.xml` - the bundled TCP stack with multicast
+discovery replaced by static loopback TCPPING. Never point them at the production stack: it discovers
+with MPING over the first site-local address, which on a machine with a VPN or a VMware/Hyper-V
+adapter is a virtual NIC multicast never crosses, so the nodes each form a cluster of one and the
+shared-bucket assertions fail on that machine only. `ClusteredMarshallingTest.awaitOneClusterOfTwo`
+asserts the two nodes actually found each other, so that failure names itself instead of surfacing as
+a confusing assertion in the test body.
+
 `RateLimitApiTest` is the Spring context test over MockMvc: the wire contract plus proof that
 configuration binding works. After changing configuration binding, run it - and for anything involving
 real timing, still boot the app and hit `/v1/rate/check`.
