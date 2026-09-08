@@ -4,6 +4,7 @@ import com.example.ratelimiter.api.model.CheckRateRequest;
 import com.example.ratelimiter.api.model.CheckRateResponse;
 import com.example.ratelimiter.core.Decision;
 import com.example.ratelimiter.core.RateLimiter;
+import com.example.ratelimiter.core.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -23,8 +24,8 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
 
     @Override
     public ResponseEntity<CheckRateResponse> checkRate(CheckRateRequest request) {
-        int tokens = request.getTokens() == null ? 1 : request.getTokens();
-        Decision decision = rateLimiter.check(request.getKey(), tokens);
+        Resource resource = Resource.fromValue(request.getResource().getValue());
+        Decision decision = rateLimiter.check(resource, request.getIdentifier());
 
         CheckRateResponse body = new CheckRateResponse()
                 .allowed(decision.allowed())

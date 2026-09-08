@@ -3,6 +3,7 @@ package com.example.ratelimiter.core;
 import com.example.ratelimiter.config.InfinispanConfig;
 import com.example.ratelimiter.config.NanoClock;
 import com.example.ratelimiter.config.RateLimiterProperties;
+import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
 import org.infinispan.Cache;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,17 +27,42 @@ public class RateLimiter {
         this.clock = clock;
     }
 
-    public Decision check(String key, int tokens) {
-        Bucket bucket = buckets.compute(key,
-                new ConsumeTokens(tokens, clock.nanos(), props.capacity(), props.refillPerSecond()));
+    /**
+     * Consumes one token from the {@code resource@identifier} bucket. The decision's
+     * {@code retryAfterMillis} is the wait until the next refill that helps: when the call was
+     * refused, until enough tokens are back; when it was allowed, until the next refill lands.
+     */
+    public Decision check(Resource resource, String identifier) {
+        return check(resource, identifier, 1);
+    }
 
-        long retryAfter = 0;
+    public Decision check(Resource resource, String identifier, long tokens) {
+        ResourcePolicy policy = props.policyFor(resource);
+        long now = clock.nanos();
+        long periodNanos = policy.refillPeriod().toNanos();
+
+        Bucket bucket = buckets.compute(bucketName(resource, identifier),
+                new ConsumeTokens(tokens, now, policy.capacity(), policy.refillTokens(), periodNanos));
+
+        // Periods needed before the bucket holds enough tokens again: none when the call went
+        // through, in which case this is simply the time to the next refill.
+        long periodsNeeded = 1;
         if (!bucket.lastAllowed()) {
-            double deficit = tokens - bucket.tokens();
-            retryAfter = props.refillPerSecond() > 0
-                    ? (long) Math.ceil(deficit / props.refillPerSecond() * 1000)
-                    : Long.MAX_VALUE;
+            if (tokens > policy.capacity()) {
+                // More than the bucket can ever hold - no amount of waiting helps.
+                return new Decision(false, policy.capacity(), bucket.tokens(), Long.MAX_VALUE);
+            }
+            long deficit = tokens - bucket.tokens();
+            periodsNeeded = ConsumeTokens.ceilDiv(deficit, policy.refillTokens());
         }
-        return new Decision(bucket.lastAllowed(), props.capacity(), (long) Math.floor(bucket.tokens()), retryAfter);
+        long nextRefillNanos = bucket.refillAnchorNanos() + periodsNeeded * periodNanos;
+        long retryAfter = Math.max(0, ConsumeTokens.ceilDiv(nextRefillNanos - now, 1_000_000L));
+
+        return new Decision(bucket.lastAllowed(), policy.capacity(), bucket.tokens(), retryAfter);
+    }
+
+    /** Bucket naming scheme: {@code <resource>@<identifier>}. */
+    static String bucketName(Resource resource, String identifier) {
+        return resource.getValue() + "@" + identifier;
     }
 }

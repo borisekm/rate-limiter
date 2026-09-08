@@ -8,10 +8,29 @@ spring:
 server:
   port: 8051
 
+# One policy per resource from the Resource enum in the OpenAPI spec. Keys must match the
+# enum's wire values exactly. Each policy applies per identifier: buckets are named
+# <resource>@<identifier>, e.g. subjectSearch@10.0.0.7 or maxCallsSess@org-42.
+# A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
+# Idle buckets are evicted once they would have refilled to capacity anyway (derived, not configured).
 ratelimiter:
-  capacity: 100             # max burst (tokens in a full bucket)
-  refill-per-second: 100    # sustained rate -> 100 req/s
-  bucket-max-idle-millis: 60000   # idle buckets are dropped from the cache after this
+  resources:
+    subjectSearch:            # calls into the subject service
+      capacity: 15
+      refill-tokens: 6
+      refill-period: 60s
+    newCases:
+      capacity: 10
+      refill-tokens: 10
+      refill-period: 24h
+    maxCallsIp:               # daily quota for our own service, per IP
+      capacity: 100000
+      refill-tokens: 100000
+      refill-period: 24h
+    maxCallsSess:             # daily quota for our own service, per session
+      capacity: 100000
+      refill-tokens: 100000
+      refill-period: 12h
 
 infinispan:
   embedded:

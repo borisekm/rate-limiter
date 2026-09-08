@@ -3,12 +3,13 @@ package com.example.ratelimiter.core;
 import org.infinispan.protostream.annotations.Proto;
 
 /**
- * Token-bucket state stored in Infinispan.
+ * Token-bucket state stored in Infinispan, one entry per {@code <resource>@<identifier>} key.
  *
- * @param tokens          fractional tokens currently available
- * @param lastRefillNanos monotonic timestamp of the last refill
- * @param lastAllowed     outcome of the most recent consume attempt (lets compute() return the decision)
+ * @param tokens            whole tokens currently available
+ * @param refillAnchorNanos start of the refill period the bucket is currently in; refills happen in
+ *                          discrete steps, so this only ever moves forward by whole periods
+ * @param lastAllowed       outcome of the most recent consume attempt (lets compute() return the decision)
  */
 @Proto
-public record Bucket(double tokens, long lastRefillNanos, boolean lastAllowed) {
+public record Bucket(long tokens, long refillAnchorNanos, boolean lastAllowed) {
 }
