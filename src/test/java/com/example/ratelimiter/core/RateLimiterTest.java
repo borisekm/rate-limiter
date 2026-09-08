@@ -34,7 +34,7 @@ class RateLimiterTest {
     void setUp() {
         cacheManager = new DefaultCacheManager();
         cacheManager.defineConfiguration("buckets", new ConfigurationBuilder().build());
-        Cache<String, Bucket> cache = cacheManager.getCache("buckets");
+        Cache<String, byte[]> cache = cacheManager.getCache("buckets");
         clock = new MutableClock();
         RateLimiterProperties props = new RateLimiterProperties(Map.of(
                 Resource.SUBJECT_SEARCH, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),

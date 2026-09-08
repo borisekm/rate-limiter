@@ -3,7 +3,7 @@
 Token-bucket rate limiter service on Spring Boot 3 + embedded Infinispan.
 
 ```bash
-mvn clean verify          # generates the API from src/main/resources/openapi, compiles, runs tests
+mvn clean verify          # generates the API, compiles, runs tests; clean also wipes ./data (see Persistence)
 mvn spring-boot:run
 
 curl -s -X POST localhost:8051/v1/rate/check \
@@ -41,7 +41,12 @@ ratelimiter:
 ```
 
 Refill is **stepwise, not a continuous drip**: at each period boundary the bucket gains
-`refill-tokens`, capped at `capacity`. Mid-period nothing accrues.
+`refill-tokens`, capped at `capacity`. Mid-period nothing accrues. In Bucket4j terms that is
+`refillIntervally`; `refillGreedy` would be the smooth drip.
+
+The algorithm itself is [Bucket4j](https://bucket4j.com), running distributed over the Infinispan
+cache (`bucket4j_jdk17-core` + `bucket4j_jdk17-infinispan`). Each policy becomes a `BucketConfiguration`
+with one `Bandwidth`, built once at startup in `core/RateLimiter`.
 
 `retryAfterMillis` is always the wait until the next refill that helps, on allowed and refused calls
 alike: when refused, until enough tokens are back; when allowed, until the next refill lands. It is
@@ -68,6 +73,14 @@ ratelimiter:
     enabled: true
     location: ./data/rate-limiter    # per node - two nodes must never share a directory
 ```
+
+The store lives in a subdirectory named after the state format (`bucket4j-v1`). Persisted entries can
+only be read back by code that still has a marshaller for them, so a change of bucket representation
+would otherwise make every request touching an old key fail with
+`No marshaller registered for Protobuf type ...`. Bumping `STATE_FORMAT` in `InfinispanConfig` on such
+a change starts a clean store instead; the previous directory becomes inert and can be deleted. This
+is what happened moving from the hand-written buckets to Bucket4j - an existing `data/` and `index/`
+pair from before that change is dead weight and safe to remove.
 
 Writes are **write-behind** (`async().enable()`), so a hard kill can lose the last few writes and
 leave a quota slightly over-permissive; in exchange a check never waits on the disk. `preload` is off:
@@ -96,10 +109,7 @@ before.
 | | |
 |---|---|
 | `core/Resource` | the limited resources; domain counterpart of the spec's `resource` enum |
-| `core/RateLimiter` | bucket naming + the decision (allowed, limit, remaining, retry-after) |
-| `core/ConsumeTokens` | the atomic refill-and-consume step run inside `cache.compute()` |
-| `core/Bucket` | cached state: tokens, refill anchor (epoch millis), last outcome |
-| `core/RateLimiterSchema` | seeds the compile-time ProtoStream schema for the two cached types |
+| `core/RateLimiter` | bucket naming, the Bucket4j configuration per resource, and the decision |
 | `config/RateLimiterProperties` | per-resource policies, derived bucket lifespan |
 | `config/InfinispanConfig` | cluster, marshaller, file store, and the wall `Clock` bean |
 | `config/ResourceConverter` | binds `ratelimiter.resources` keys by wire value |
@@ -151,45 +161,27 @@ the nodes would each form a cluster of one and the shared-limit tests would fail
 nothing to do with the code.
 
 A bucket lives on whichever nodes its key hashes to, which is usually not the node handling the
-request. All mutation therefore goes through `cache.compute()`, which ships `ConsumeTokens` to the
-key's **primary owner** and runs it there - that is what makes refill-and-consume atomic across the
-cluster without explicit locking. Never read a bucket, decide, and write it back.
+request. Bucket4j's `InfinispanProxyManager` therefore ships an **entry processor** to the key's
+primary owner and runs the refill-and-consume there - atomic across the cluster without explicit
+locking. Never read a bucket, decide, and write it back.
 
 ## Serialization (ProtoStream)
 
-Two things cross a node boundary and so have to be turned into bytes: the `Bucket` being stored and
-replicated, and the `ConsumeTokens` function being shipped to the owner. The latter is why it is a
-record implementing `SerializableBiFunction` rather than a lambda - a lambda cannot be marshalled
-across JVMs, so the function carries its parameters as fields and travels with them.
+Two things cross a node boundary and so have to be turned into bytes: the bucket state being stored
+and replicated, and Bucket4j's entry processor being shipped to the owner.
 
 `InfinispanConfig` sets ProtoStream as the user marshaller explicitly. This matters: the Spring Boot
 starter otherwise leaves it as `JavaSerializationMarshaller`, and the first time a bucket key is owned
-by another node the shipped `ConsumeTokens` is refused by the deserialization allow list
+by another node the shipped entry processor is refused by the deserialization allow list
 (`ISPN000936`) - a failure a single node never sees. Check the startup log for
 `ISPN000556: Starting user marshaller 'org.infinispan.commons.marshall.ProtoStreamMarshaller'`. Note
 also that a marshaller passed in explicitly does not pick up `addContextInitializer`; the schema is
-registered on the marshaller instance instead.
+registered on the marshaller instance instead - here Bucket4j's own
+`Bucket4jProtobufContextInitializer`, which covers its processor and result types.
 
-Infinispan disables Java's built-in serialization by default and marshals with ProtoStream, its
-implementation of Protobuf: the layout lives in a schema rather than in the bytes. The
-`protostream-processor` (a `provided`-scope dependency) reads the `@Proto` annotations on `Bucket` and
-`ConsumeTokens` plus the `@ProtoSchema` on `RateLimiterSchema` at compile time and generates both a
-`ratelimiter.proto` schema and a `RateLimiterSchemaImpl` marshaller, which `InfinispanConfig`
-registers with `addContextInitializer`. Generated for `Bucket`:
+Bucket state itself is stored as `byte[]`: Bucket4j serialises its own state, so the cache never sees
+an application type. That is why this project no longer defines any `@Proto` records or a ProtoStream
+schema of its own, and why `protostream-processor` is no longer a dependency.
 
-```proto
-message Bucket {
-   optional int64 tokens = 1;
-   optional int64 refillAnchorEpochMillis = 2;
-   optional bool  lastAllowed = 3;
-}
-```
-
-**Field numbers are assigned by declaration order.** Appending a field to `Bucket` or `ConsumeTokens`
-is safe; inserting or reordering one renumbers the rest, and a node still on the old numbering will
-silently misread the new bytes. A change of that kind needs a full cluster restart rather than a
-rolling one.
-
-None of this would be needed for a single node on a `LOCAL` cache - entries would stay on the heap as
-ordinary objects and `@Proto` plus `RateLimiterSchema` could go - but that gives up the distribution
+None of this would be needed for a single node on a `LOCAL` cache - but that gives up the distribution
 that makes this a service rather than a library.

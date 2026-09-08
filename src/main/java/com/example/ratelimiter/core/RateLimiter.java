@@ -3,29 +3,89 @@ package com.example.ratelimiter.core;
 import com.example.ratelimiter.config.InfinispanConfig;
 import com.example.ratelimiter.config.RateLimiterProperties;
 import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
+import io.github.bucket4j.Bandwidth;
+import io.github.bucket4j.BucketConfiguration;
+import io.github.bucket4j.ConsumptionProbe;
+import io.github.bucket4j.TimeMeter;
+import io.github.bucket4j.VerboseResult;
+import io.github.bucket4j.distributed.BucketProxy;
+import io.github.bucket4j.distributed.proxy.ProxyManager;
+import io.github.bucket4j.grid.infinispan.Bucket4jInfinispan;
 import org.infinispan.Cache;
+import org.infinispan.functional.FunctionalMap.ReadWriteMap;
+import org.infinispan.functional.impl.FunctionalMapImpl;
+import org.infinispan.functional.impl.ReadWriteMapImpl;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * Token-bucket decisions, backed by Bucket4j over the distributed Infinispan cache.
+ *
+ * <p>Bucket4j owns the algorithm and the atomicity: its entry processor is applied on the key's
+ * primary owner, so concurrent callers on any node are serialised per bucket without explicit
+ * locking. Bucket state is stored as {@code byte[]}, which the cache store persists like any other
+ * value.
+ */
 @Service
 public class RateLimiter {
 
-    private final Cache<String, Bucket> buckets;
+    private final ProxyManager<String> proxyManager;
     private final RateLimiterProperties props;
+    private final Map<Resource, BucketConfiguration> configurations = new EnumMap<>(Resource.class);
     private final Clock clock;
 
     @Autowired
     public RateLimiter(EmbeddedCacheManager cacheManager, RateLimiterProperties props, Clock clock) {
-        this(cacheManager.<String, Bucket>getCache(InfinispanConfig.BUCKETS_CACHE), props, clock);
+        this(cacheManager.<String, byte[]>getCache(InfinispanConfig.BUCKETS_CACHE), props, clock);
     }
 
-    RateLimiter(Cache<String, Bucket> buckets, RateLimiterProperties props, Clock clock) {
-        this.buckets = buckets;
+    RateLimiter(Cache<String, byte[]> buckets, RateLimiterProperties props, Clock clock) {
         this.props = props;
         this.clock = clock;
+        ReadWriteMap<String, byte[]> readWriteMap =
+                ReadWriteMapImpl.create(FunctionalMapImpl.create(buckets.getAdvancedCache()));
+        this.proxyManager = Bucket4jInfinispan.entryProcessorBasedBuilder(readWriteMap)
+                .clientClock(wallClock())
+                .build();
+        props.resources().forEach((resource, policy) -> configurations.put(resource, bucketConfiguration(policy)));
+    }
+
+    /**
+     * Wall-clock rather than Bucket4j's default {@code nanoTime}: buckets are persisted and read by
+     * other nodes, and only wall-clock time means the same thing in a new JVM and on another host.
+     */
+    private TimeMeter wallClock() {
+        return new TimeMeter() {
+            @Override
+            public long currentTimeNanos() {
+                return TimeUnit.MILLISECONDS.toNanos(clock.millis());
+            }
+
+            @Override
+            public boolean isWallClockBased() {
+                return true;
+            }
+        };
+    }
+
+    /**
+     * {@code refillIntervally} is the stepwise refill this service is specified in: the whole
+     * {@code refill-tokens} arrive at each period boundary rather than dripping continuously
+     * ({@code refillGreedy}). A bucket starts full, which is Bucket4j's default initial tokens.
+     */
+    private static BucketConfiguration bucketConfiguration(ResourcePolicy policy) {
+        return BucketConfiguration.builder()
+                .addLimit(Bandwidth.builder()
+                        .capacity(policy.capacity())
+                        .refillIntervally(policy.refillTokens(), policy.refillPeriod())
+                        .build())
+                .build();
     }
 
     /**
@@ -39,27 +99,36 @@ public class RateLimiter {
 
     public Decision check(Resource resource, String identifier, long tokens) {
         ResourcePolicy policy = props.policyFor(resource);
-        long now = clock.millis();
-        long periodMillis = policy.refillPeriod().toMillis();
+        BucketProxy bucket = proxyManager.builder()
+                .build(bucketName(resource, identifier), configurations.get(resource));
 
-        Bucket bucket = buckets.compute(bucketName(resource, identifier),
-                new ConsumeTokens(tokens, now, policy.capacity(), policy.refillTokens(), periodMillis));
+        // The verbose variant returns the resulting bucket state alongside the probe, which is what
+        // lets an allowed call report its countdown without a second round trip to the owner.
+        VerboseResult<ConsumptionProbe> verbose = bucket.asVerbose().tryConsumeAndReturnRemaining(tokens);
+        ConsumptionProbe probe = verbose.getValue();
 
-        // Periods needed before the bucket holds enough tokens again: none when the call went
-        // through, in which case this is simply the time to the next refill.
-        long periodsNeeded = 1;
-        if (!bucket.lastAllowed()) {
-            if (tokens > policy.capacity()) {
-                // More than the bucket can ever hold - no amount of waiting helps.
-                return new Decision(false, policy.capacity(), bucket.tokens(), Long.MAX_VALUE);
-            }
-            long deficit = tokens - bucket.tokens();
-            periodsNeeded = ConsumeTokens.ceilDiv(deficit, policy.refillTokens());
+        long retryAfter;
+        if (probe.isConsumed()) {
+            // Time until one more token than we now hold - i.e. until the next refill. Asking for
+            // remaining+1 is always within capacity here, because tokens were just consumed.
+            long nowNanos = TimeUnit.MILLISECONDS.toNanos(clock.millis());
+            long delayNanos = verbose.getState()
+                    .calculateDelayNanosAfterWillBePossibleToConsume(probe.getRemainingTokens() + 1, nowNanos, false);
+            retryAfter = toMillis(delayNanos);
+        } else if (tokens > policy.capacity()) {
+            retryAfter = Long.MAX_VALUE;   // more than the bucket can ever hold - waiting never helps
+        } else {
+            retryAfter = toMillis(probe.getNanosToWaitForRefill());
         }
-        long nextRefillMillis = bucket.refillAnchorEpochMillis() + periodsNeeded * periodMillis;
-        long retryAfter = Math.max(0, nextRefillMillis - now);
 
-        return new Decision(bucket.lastAllowed(), policy.capacity(), bucket.tokens(), retryAfter);
+        return new Decision(probe.isConsumed(), policy.capacity(), probe.getRemainingTokens(), retryAfter);
+    }
+
+    private static long toMillis(long nanos) {
+        if (nanos <= 0) {
+            return 0;
+        }
+        return Math.max(0, (nanos + 999_999L) / 1_000_000L);
     }
 
     /** Bucket naming scheme: {@code <resource>@<identifier>}. */

@@ -1,6 +1,6 @@
 package com.example.ratelimiter.config;
 
-import com.example.ratelimiter.core.RateLimiterSchemaImpl;
+import io.github.bucket4j.grid.infinispan.serialization.Bucket4jProtobufContextInitializer;
 import org.infinispan.commons.marshall.ProtoStreamMarshaller;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
@@ -18,6 +18,15 @@ import java.util.concurrent.TimeUnit;
 public class InfinispanConfig {
 
     public static final String BUCKETS_CACHE = "rate-limit-buckets";
+
+    /**
+     * Subdirectory of the store, named after the format the bucket state is written in. Entries
+     * persisted by an older format cannot be read back - the marshaller for them no longer exists -
+     * and a store full of them fails every request that touches such a key with
+     * "No marshaller registered for Protobuf type ...". Bumping this on a format change starts a
+     * clean store instead; the old directory is then inert and can be deleted at leisure.
+     */
+    private static final String STATE_FORMAT = "bucket4j-v1";
 
     /** Nodes only cluster with nodes of the same name; keep environments apart with this. */
     private final String clusterName;
@@ -67,11 +76,11 @@ public class InfinispanConfig {
                 .clusterName(clusterName)
                 .addProperty("configurationFile", jgroupsConfig);
         // The Spring Boot starter otherwise leaves the user marshaller as JavaSerializationMarshaller,
-        // which cannot marshal ConsumeTokens across nodes (ISPN000936, blocked by the deserialization
-        // allow list). An explicitly supplied marshaller does not pick up addContextInitializer, so
-        // the schema is registered on the instance itself.
+        // which cannot marshal Bucket4j's entry processor across nodes (ISPN000936, blocked by the
+        // deserialization allow list). An explicitly supplied marshaller does not pick up
+        // addContextInitializer, so Bucket4j's schema is registered on the instance itself.
         ProtoStreamMarshaller marshaller = new ProtoStreamMarshaller();
-        marshaller.register(new RateLimiterSchemaImpl());
+        marshaller.register(new Bucket4jProtobufContextInitializer());
         builder.serialization().marshaller(marshaller);
         builder.cacheContainer().statistics(true);
         if (persistenceEnabled) {
@@ -97,8 +106,8 @@ public class InfinispanConfig {
                     .passivation(false)          // write through to the store, do not move entries out of memory
                     .addSoftIndexFileStore()
                     // Relative: resolved against the global persistent location set above.
-                    .dataLocation("data")
-                    .indexLocation("index")
+                    .dataLocation(STATE_FORMAT + "/data")
+                    .indexLocation(STATE_FORMAT + "/index")
                     .segmented(true)
                     .shared(false)
                     .preload(false)              // compute() reads through on a miss; no full load at boot
