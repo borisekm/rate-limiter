@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Clock;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
@@ -21,13 +22,32 @@ public class InfinispanConfig {
     /** Nodes only cluster with nodes of the same name; keep environments apart with this. */
     private final String clusterName;
 
-    public InfinispanConfig(@Value("${ratelimiter.cluster-name:rate-limiter}") String clusterName) {
+    /** Where this node keeps its bucket store. Must not be shared with another node on the host. */
+    private final String persistenceLocation;
+
+    private final boolean persistenceEnabled;
+
+    /** JGroups stack. TCP everywhere; only member discovery differs between environments. */
+    private final String jgroupsConfig;
+
+    public InfinispanConfig(
+            @Value("${ratelimiter.cluster-name:rate-limiter}") String clusterName,
+            @Value("${ratelimiter.persistence.location:./data/rate-limiter}") String persistenceLocation,
+            @Value("${ratelimiter.persistence.enabled:true}") boolean persistenceEnabled,
+            @Value("${ratelimiter.jgroups-config:default-configs/default-jgroups-tcp.xml}") String jgroupsConfig) {
         this.clusterName = clusterName;
+        this.persistenceLocation = persistenceLocation;
+        this.persistenceEnabled = persistenceEnabled;
+        this.jgroupsConfig = jgroupsConfig;
     }
 
+    /**
+     * Wall-clock time. Buckets outlive the JVM that wrote them and are read by other nodes, so their
+     * refill anchors cannot come from {@code nanoTime()}, whose zero point is per-JVM.
+     */
     @Bean
-    NanoClock nanoClock() {
-        return NanoClock.system();
+    Clock clock() {
+        return Clock.systemUTC();
     }
 
     /**
@@ -39,9 +59,13 @@ public class InfinispanConfig {
     InfinispanGlobalConfigurer globalConfigurer() {
         GlobalConfigurationBuilder builder = new GlobalConfigurationBuilder()
                 .clusteredDefault();
-        builder.transport().clusterName(clusterName);
-        // On Kubernetes switch the JGroups stack, e.g.
-        // builder.transport().addProperty("configurationFile", "default-configs/default-jgroups-kubernetes.xml")
+        // TCP rather than the clusteredDefault() UDP stack: multicast is unavailable on OpenShift and
+        // most cloud networks, so this is the transport we deploy on. The bundled TCP stack still
+        // discovers members with MPING (multicast), which works locally but not on OpenShift - switch
+        // ratelimiter.jgroups-config there, see README.
+        builder.transport()
+                .clusterName(clusterName)
+                .addProperty("configurationFile", jgroupsConfig);
         // The Spring Boot starter otherwise leaves the user marshaller as JavaSerializationMarshaller,
         // which cannot marshal ConsumeTokens across nodes (ISPN000936, blocked by the deserialization
         // allow list). An explicitly supplied marshaller does not pick up addContextInitializer, so
@@ -50,16 +74,37 @@ public class InfinispanConfig {
         marshaller.register(new RateLimiterSchemaImpl());
         builder.serialization().marshaller(marshaller);
         builder.cacheContainer().statistics(true);
+        if (persistenceEnabled) {
+            // A file store resolves its relative paths against global state, which is off by default.
+            builder.globalState().enable().persistentLocation(persistenceLocation);
+        }
         return builder::build;
     }
 
     @Bean
     InfinispanCacheConfigurer bucketsCacheConfigurer(RateLimiterProperties props) {
-        return manager -> manager.defineConfiguration(BUCKETS_CACHE, new ConfigurationBuilder()
-                .clustering().cacheMode(CacheMode.DIST_SYNC)
+        ConfigurationBuilder cache = new ConfigurationBuilder();
+        cache.clustering().cacheMode(CacheMode.DIST_SYNC)
                 .hash().numOwners(2)
-                .expiration().maxIdle(props.maxBucketIdle().toMillis(), TimeUnit.MILLISECONDS)
-                .statistics().enable()
-                .build());
+                .expiration().lifespan(props.bucketLifespan().toMillis(), TimeUnit.MILLISECONDS)
+                .statistics().enable();
+
+        if (persistenceEnabled) {
+            // Buckets survive a restart of every node. The store is this node's own (shared=false), so
+            // it holds the segments this node owns; coming back with a different number of nodes can
+            // therefore orphan buckets. See README for what that means on OpenShift.
+            cache.persistence()
+                    .passivation(false)          // write through to the store, do not move entries out of memory
+                    .addSoftIndexFileStore()
+                    // Relative: resolved against the global persistent location set above.
+                    .dataLocation("data")
+                    .indexLocation("index")
+                    .segmented(true)
+                    .shared(false)
+                    .preload(false)              // compute() reads through on a miss; no full load at boot
+                    .purgeOnStartup(false)       // the whole point
+                    .async().enable();           // write-behind: a hard kill can lose the last few writes
+        }
+        return manager -> manager.defineConfiguration(BUCKETS_CACHE, cache.build());
     }
 }

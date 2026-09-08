@@ -56,10 +56,14 @@ public record RateLimiterProperties(Map<Resource, @Valid ResourcePolicy> resourc
     }
 
     /**
-     * How long an untouched bucket must be kept. Once an empty bucket would have refilled to
-     * capacity it is indistinguishable from an absent one, so anything older can be evicted.
+     * How long a bucket must be kept. Once an empty bucket would have refilled to capacity it is
+     * indistinguishable from an absent one, so anything older can be dropped.
+     *
+     * <p>Applied as lifespan rather than max-idle: Infinispan refuses max-idle alongside a store
+     * without passivation (ISPN000651), and every check writes the entry anyway, so lifespan is
+     * refreshed on each use and amounts to the same thing here.
      */
-    public Duration maxBucketIdle() {
+    public Duration bucketLifespan() {
         return resources.values().stream()
                 .map(ResourcePolicy::timeToFull)
                 .max(Duration::compareTo)

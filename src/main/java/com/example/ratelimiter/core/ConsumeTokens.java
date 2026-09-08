@@ -8,26 +8,33 @@ import org.infinispan.util.function.SerializableBiFunction;
  * owner, so concurrent callers on any node are serialized per key without explicit locking.
  * Marshallable (ProtoStream) so it can be shipped to a remote owner.
  *
- * <p>Refill is stepwise, matching how the quotas are specified: every {@code refillPeriodNanos} the
+ * <p>Refill is stepwise, matching how the quotas are specified: every {@code refillPeriodMillis} the
  * bucket gains {@code refillTokens}, capped at {@code capacity}. A bucket that has never been seen
  * starts full.
+ *
+ * <p>Times are epoch milliseconds, not {@code nanoTime()}: buckets outlive the JVM that wrote them
+ * (see the cache store) and are read by other nodes, and only wall-clock time means the same thing
+ * in all of those places.
  */
 @Proto
-public record ConsumeTokens(long tokens, long nowNanos, long capacity, long refillTokens, long refillPeriodNanos)
+public record ConsumeTokens(long tokens, long nowEpochMillis, long capacity, long refillTokens, long refillPeriodMillis)
         implements SerializableBiFunction<String, Bucket, Bucket> {
 
     @Override
     public Bucket apply(String key, Bucket existing) {
         long available;
         long anchor;
-        if (existing == null) {
-            available = capacity;
-            anchor = nowNanos;
+        if (existing == null || existing.refillAnchorEpochMillis() > nowEpochMillis) {
+            // Unknown bucket, or the wall clock stepped back behind the anchor (an NTP correction).
+            // Re-anchoring beats clamping the elapsed time to 0, which would stall refills for as
+            // long as the jump lasted.
+            available = existing == null ? capacity : Math.min(existing.tokens(), capacity);
+            anchor = nowEpochMillis;
         } else {
-            long elapsed = Math.max(0, nowNanos - existing.refillAnchorNanos());
-            long periods = elapsed / refillPeriodNanos;
+            long elapsed = nowEpochMillis - existing.refillAnchorEpochMillis();
+            long periods = elapsed / refillPeriodMillis;
             available = refill(existing.tokens(), periods);
-            anchor = existing.refillAnchorNanos() + periods * refillPeriodNanos;
+            anchor = existing.refillAnchorEpochMillis() + periods * refillPeriodMillis;
         }
 
         if (available >= tokens) {

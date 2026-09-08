@@ -1,7 +1,7 @@
 package com.example.ratelimiter.core;
 
+import com.example.ratelimiter.MutableClock;
 import com.example.ratelimiter.api.model.CheckRateRequest;
-import com.example.ratelimiter.config.NanoClock;
 import com.example.ratelimiter.config.RateLimiterProperties;
 import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
 import org.infinispan.Cache;
@@ -17,7 +17,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,10 +26,8 @@ class RateLimiterTest {
     private static final Resource SUBJECT = Resource.SUBJECT_SEARCH;  // 15 burst, +6 per minute
     private static final Resource DAILY = Resource.MAX_CALLS_IP;      // 100k per day
 
-    private static final long MINUTE_NANOS = Duration.ofMinutes(1).toNanos();
-
     private DefaultCacheManager cacheManager;
-    private AtomicLong now;
+    private MutableClock clock;
     private RateLimiter limiter;
 
     @BeforeEach
@@ -38,8 +35,7 @@ class RateLimiterTest {
         cacheManager = new DefaultCacheManager();
         cacheManager.defineConfiguration("buckets", new ConfigurationBuilder().build());
         Cache<String, Bucket> cache = cacheManager.getCache("buckets");
-        now = new AtomicLong(0);
-        NanoClock clock = now::get;
+        clock = new MutableClock();
         RateLimiterProperties props = new RateLimiterProperties(Map.of(
                 Resource.SUBJECT_SEARCH, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
                 Resource.NEW_CASES, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
@@ -87,11 +83,11 @@ class RateLimiterTest {
         assertThat(denied.remaining()).isZero();
         assertThat(denied.retryAfterMillis()).isEqualTo(60_000);
 
-        now.addAndGet(MINUTE_NANOS / 2);                    // mid-period: nothing yet
+        clock.advance(Duration.ofSeconds(30));                    // mid-period: nothing yet
         assertThat(limiter.check(SUBJECT, "ip").allowed()).isFalse();
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(30_000);
 
-        now.addAndGet(MINUTE_NANOS / 2);                    // period boundary: +6 tokens
+        clock.advance(Duration.ofSeconds(30));                    // period boundary: +6 tokens
         Decision after = limiter.check(SUBJECT, "ip");
         assertThat(after.allowed()).isTrue();
         assertThat(after.remaining()).isEqualTo(5);
@@ -104,10 +100,10 @@ class RateLimiterTest {
         assertThat(first.allowed()).isTrue();
         assertThat(first.retryAfterMillis()).isEqualTo(60_000);   // bucket created now, refill in a period
 
-        now.addAndGet(MINUTE_NANOS / 4);
+        clock.advance(Duration.ofSeconds(15));
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(45_000);
 
-        now.addAndGet(MINUTE_NANOS);                              // t=75s: the 60s refill has landed,
+        clock.advance(Duration.ofMinutes(1));                              // t=75s: the 60s refill has landed,
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(45_000);  // next is at 120s
     }
 
@@ -116,12 +112,12 @@ class RateLimiterTest {
         for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
 
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(60_000);
-        now.addAndGet(MINUTE_NANOS / 10);
+        clock.advance(Duration.ofSeconds(6));
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(54_000);
-        now.addAndGet(MINUTE_NANOS / 10 * 8);
+        clock.advance(Duration.ofSeconds(48));
         assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(6_000);
 
-        now.addAndGet(MINUTE_NANOS / 10);                         // the boundary itself
+        clock.advance(Duration.ofSeconds(6));                         // the boundary itself
         Decision refilled = limiter.check(SUBJECT, "ip");
         assertThat(refilled.allowed()).isTrue();
         assertThat(refilled.retryAfterMillis()).isEqualTo(60_000); // a fresh period starts
@@ -154,7 +150,7 @@ class RateLimiterTest {
     void refillIsCappedAtCapacity() {
         for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
 
-        now.addAndGet(MINUTE_NANOS * 100);                  // far more refills than fit
+        clock.advance(Duration.ofMinutes(100));                  // far more refills than fit
         assertThat(limiter.check(SUBJECT, "ip").remaining()).isEqualTo(14);
     }
 
@@ -180,7 +176,7 @@ class RateLimiterTest {
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.retryAfterMillis()).isEqualTo(Duration.ofDays(1).toMillis());
 
-        now.addAndGet(Duration.ofDays(1).toNanos());
+        clock.advance(Duration.ofDays(1));
         assertThat(limiter.check(DAILY, "ip").allowed()).isTrue();
     }
 

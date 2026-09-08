@@ -1,7 +1,6 @@
 package com.example.ratelimiter.core;
 
 import com.example.ratelimiter.config.InfinispanConfig;
-import com.example.ratelimiter.config.NanoClock;
 import com.example.ratelimiter.config.RateLimiterProperties;
 import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
 import org.infinispan.Cache;
@@ -9,19 +8,21 @@ import org.infinispan.manager.EmbeddedCacheManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+
 @Service
 public class RateLimiter {
 
     private final Cache<String, Bucket> buckets;
     private final RateLimiterProperties props;
-    private final NanoClock clock;
+    private final Clock clock;
 
     @Autowired
-    public RateLimiter(EmbeddedCacheManager cacheManager, RateLimiterProperties props, NanoClock clock) {
+    public RateLimiter(EmbeddedCacheManager cacheManager, RateLimiterProperties props, Clock clock) {
         this(cacheManager.<String, Bucket>getCache(InfinispanConfig.BUCKETS_CACHE), props, clock);
     }
 
-    RateLimiter(Cache<String, Bucket> buckets, RateLimiterProperties props, NanoClock clock) {
+    RateLimiter(Cache<String, Bucket> buckets, RateLimiterProperties props, Clock clock) {
         this.buckets = buckets;
         this.props = props;
         this.clock = clock;
@@ -38,11 +39,11 @@ public class RateLimiter {
 
     public Decision check(Resource resource, String identifier, long tokens) {
         ResourcePolicy policy = props.policyFor(resource);
-        long now = clock.nanos();
-        long periodNanos = policy.refillPeriod().toNanos();
+        long now = clock.millis();
+        long periodMillis = policy.refillPeriod().toMillis();
 
         Bucket bucket = buckets.compute(bucketName(resource, identifier),
-                new ConsumeTokens(tokens, now, policy.capacity(), policy.refillTokens(), periodNanos));
+                new ConsumeTokens(tokens, now, policy.capacity(), policy.refillTokens(), periodMillis));
 
         // Periods needed before the bucket holds enough tokens again: none when the call went
         // through, in which case this is simply the time to the next refill.
@@ -55,8 +56,8 @@ public class RateLimiter {
             long deficit = tokens - bucket.tokens();
             periodsNeeded = ConsumeTokens.ceilDiv(deficit, policy.refillTokens());
         }
-        long nextRefillNanos = bucket.refillAnchorNanos() + periodsNeeded * periodNanos;
-        long retryAfter = Math.max(0, ConsumeTokens.ceilDiv(nextRefillNanos - now, 1_000_000L));
+        long nextRefillMillis = bucket.refillAnchorEpochMillis() + periodsNeeded * periodMillis;
+        long retryAfter = Math.max(0, nextRefillMillis - now);
 
         return new Decision(bucket.lastAllowed(), policy.capacity(), bucket.tokens(), retryAfter);
     }

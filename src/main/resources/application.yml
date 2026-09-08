@@ -12,8 +12,20 @@ server:
 # enum's wire values exactly. Each policy applies per identifier: buckets are named
 # <resource>@<identifier>, e.g. subjectSearch@10.0.0.7 or maxCallsSess@org-42.
 # A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
-# Idle buckets are evicted once they would have refilled to capacity anyway (derived, not configured).
+# Buckets are dropped once they would have refilled to capacity anyway (derived, not configured).
 ratelimiter:
+  # cluster-name: rate-limiter   # nodes only cluster with nodes of the same name
+  # JGroups stack. TCP in every environment; the files differ only in how members are discovered.
+  # Local/dev uses MPING (multicast discovery). On OpenShift switch to DNS_PING:
+  #   jgroups-config: default-configs/default-jgroups-kubernetes.xml
+  # and set -Djgroups.dns.query=<headless-service>.<namespace>.svc.cluster.local
+  # jgroups-config: default-configs/default-jgroups-tcp.xml
+  persistence:
+    enabled: true
+    # Buckets are written here so they survive a restart of every node. Each node needs its own
+    # directory - two nodes on one host must not share one. On OpenShift this means a StatefulSet
+    # with a PVC per pod; see README.
+    location: ./data/rate-limiter
   resources:
     subjectSearch:            # calls into the subject service
       capacity: 15

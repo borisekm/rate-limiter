@@ -23,7 +23,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * controllable here, so this asserts the shape of {@code retryAfterMillis} - never 0, never past the
  * resource's period - while {@code RateLimiterTest} pins the arithmetic down with a fake clock.
  */
-@SpringBootTest(properties = "ratelimiter.cluster-name=test-rate-limit-api")
+@SpringBootTest(properties = {
+        "ratelimiter.cluster-name=test-rate-limit-api",
+        // Persistence stays on, so the wiring the app really runs with is exercised - but into a
+        // temporary directory, and every test uses a fresh random identifier so leftovers never match.
+        "ratelimiter.persistence.location=${java.io.tmpdir}/rate-limiter-test/api"})
 @AutoConfigureMockMvc
 class RateLimitApiTest {
 
