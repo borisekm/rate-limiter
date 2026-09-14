@@ -1,0 +1,17 @@
+services:
+  rate-limiter:
+    build: .
+    image: rate-limiter:0.1.0-SNAPSHOT
+    container_name: rate-limiter
+    ports:
+      - "8051:8051"
+    environment:
+      # Keep this node away from anything else clustering on the host network.
+      RATELIMITER_CLUSTER_NAME: rate-limiter-local
+    volumes:
+      # Per-node bucket store. A second node needs its own volume, never this one.
+      - rate-limiter-data:/data
+    restart: unless-stopped
+
+volumes:
+  rate-limiter-data:
