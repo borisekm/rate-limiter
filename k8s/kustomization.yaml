@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rate-limiter
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - configmap.yaml
+  - service.yaml
+  - statefulset.yaml
+images:
+  # Per-node registry on the worker's own loopback - containerd resolves a localhost
+  # reference over plain HTTP, so no node needs certs.d configuration. See README.md.
+  # Pinned by digest, not by tag: the tag does not change between rebuilds, so a node with
+  # imagePullPolicy IfNotPresent would go on running the image it already has. push-image.sh
+  # rewrites this line with whatever it pushed.
+  - name: rate-limiter
+    newName: localhost:5000/rate-limiter
+    digest: sha256:b85e19eda568b8bc768112dc113ff72ec8caccab37e3672b3f0e3a0044a63053

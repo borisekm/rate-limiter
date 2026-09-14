@@ -1,0 +1,39 @@
+# Headless service: the DNS record DNS_PING resolves to find cluster members.
+# publishNotReadyAddresses is essential - a starting pod is not ready until Infinispan has
+# joined, so without it members can never discover each other and each forms a cluster of one.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiter-headless
+  labels:
+    app: rate-limiter
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: rate-limiter
+  ports:
+    - name: jgroups
+      port: 7800
+      targetPort: jgroups
+    - name: jgroups-fd
+      port: 57800          # FD_SOCK2: bind port + the stack's 50000 offset
+      targetPort: 57800
+---
+# Client-facing service. NodePort because this cluster has no ingress controller:
+# reach it on http://<any node IP>:30851/v1/rate/check
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiter
+  labels:
+    app: rate-limiter
+spec:
+  type: NodePort
+  selector:
+    app: rate-limiter
+  ports:
+    - name: http
+      port: 8051
+      targetPort: http
+      nodePort: 30851

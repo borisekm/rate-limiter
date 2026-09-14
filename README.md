@@ -193,3 +193,21 @@ schema of its own, and why `protostream-processor` is no longer a dependency.
 
 None of this would be needed for a single node on a `LOCAL` cache - but that gives up the distribution
 that makes this a service rather than a library.
+
+## Containers and Kubernetes
+
+`Dockerfile` builds the service (the OpenAPI generation runs inside the build stage) onto a JRE
+image that keeps its bucket store in the `/data` volume; `compose.yaml` runs a single node locally.
+
+```bash
+docker compose up -d
+curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json' \
+  -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
+```
+
+Every response carries an `X-Served-By` header naming the node that answered (the pod name on
+Kubernetes, the hostname otherwise; override with `ratelimiter.instance-id`). It is a header and not
+a response field because the response schema belongs to the API contract.
+
+`k8s/` deploys two clustered nodes as a StatefulSet - a volume per pod, DNS_PING discovery instead
+of multicast, and a NodePort for clients. See [k8s/README.md](k8s/README.md).

@@ -27,7 +27,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "ratelimiter.cluster-name=test-rate-limit-api",
         // Persistence stays on, so the wiring the app really runs with is exercised - but into a
         // temporary directory, and every test uses a fresh random identifier so leftovers never match.
-        "ratelimiter.persistence.location=${java.io.tmpdir}/rate-limiter-test/api"})
+        "ratelimiter.persistence.location=${java.io.tmpdir}/rate-limiter-test/api",
+        // On Kubernetes the StatefulSet passes the pod name here; anywhere else it is the hostname.
+        "ratelimiter.instance-id=test-node-1"})
 @AutoConfigureMockMvc
 class RateLimitApiTest {
 
@@ -79,10 +81,19 @@ class RateLimitApiTest {
         ResultActions refused = check("subjectSearch", identifier)
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().exists("Retry-After"))
+                .andExpect(header().string("X-Served-By", "test-node-1"))
                 .andExpect(jsonPath("$.allowed").value(false))
                 .andExpect(jsonPath("$.remaining").value(0));
 
         assertThat(retryAfterOf(refused)).isBetween(1L, MINUTE_MILLIS);
+    }
+
+    @Test
+    void servedByHeaderNamesTheAnsweringNode() throws Exception {
+        // Which node answered - the response body is the API contract's, so this rides in a header.
+        check("subjectSearch", UUID.randomUUID().toString())
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Served-By", "test-node-1"));
     }
 
     @Test

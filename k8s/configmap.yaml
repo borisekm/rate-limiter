@@ -1,0 +1,25 @@
+# Every knob the deployment needs, in one place. The values map to the same properties
+# application.yml documents; Spring binds RATELIMITER_X_Y -> ratelimiter.x.y.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limiter-config
+data:
+  # Nodes only cluster with nodes of the same name - keep environments apart with this.
+  RATELIMITER_CLUSTER_NAME: "rate-limiter-k8s"
+
+  # JGroups: TCP transport with DNS_PING discovery. The bundled default TCP stack discovers
+  # over multicast (MPING), which does not work here - this stack asks DNS for the members
+  # instead, which is what the headless service exists to answer.
+  RATELIMITER_JGROUPS_CONFIG: "org/infinispan/configuration/default-jgroups-kubernetes.xml"
+
+  # Headless service DNS_PING queries for A records, one per pod. The StatefulSet appends
+  # .<namespace>.svc.cluster.local from the downward API, so this stays namespace-agnostic.
+  JGROUPS_DNS_SERVICE: "rate-limiter-headless"
+
+  # Bucket store. Per pod - the PVC in volumeClaimTemplates mounts at /data.
+  RATELIMITER_PERSISTENCE_ENABLED: "true"
+  RATELIMITER_PERSISTENCE_LOCATION: "/data/rate-limiter"
+
+  # Heap ceiling inside the container limit; JGroups -D flags are added by the StatefulSet.
+  JAVA_HEAP_OPTS: "-XX:MaxRAMPercentage=75"

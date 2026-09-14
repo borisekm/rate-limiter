@@ -20,7 +20,7 @@ WORKDIR /app
 
 # The bucket store must belong to the node, not to an image layer: /data is a volume.
 # Each node needs its own - never point two containers at one directory.
-RUN addgroup -S app && adduser -S -G app app \
+RUN addgroup -g 1000 -S app && adduser -u 1000 -S -G app app \
  && mkdir -p /data/rate-limiter && chown -R app:app /data
 USER app
 

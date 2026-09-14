@@ -1,0 +1,56 @@
+# This cluster has no dynamic provisioner, and the bucket store must be per node
+# (SoftIndexFileStore, shared=false - two nodes must never share a directory), so each
+# replica gets a node-pinned PersistentVolume. WaitForFirstConsumer lets the scheduler
+# place the pod first and bind the PV that lives on the node it picked.
+#
+# On a cluster with a real StorageClass, delete this file and set
+# volumeClaimTemplates[].spec.storageClassName in the StatefulSet to that class instead.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rate-limiter-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: rate-limiter-data-worker-1
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: rate-limiter-local
+  hostPath:
+    path: /var/lib/rate-limiter/data-0
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["worker-1"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: rate-limiter-data-worker-2
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: rate-limiter-local
+  hostPath:
+    path: /var/lib/rate-limiter/data-1
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["worker-2"]
