@@ -1,6 +1,6 @@
 # rate-limiter
 
-Token-bucket rate limiter service on Spring Boot 3 + embedded Infinispan.
+Token-bucket rate limiter service on Spring Boot 4 + embedded Infinispan 16.
 
 ```bash
 mvn clean verify          # generates the API, compiles, runs tests; clean also wipes ./data (see Persistence)
@@ -74,13 +74,14 @@ ratelimiter:
     location: ./data/rate-limiter    # per node - two nodes must never share a directory
 ```
 
-The store lives in a subdirectory named after the state format (`bucket4j-v1`). Persisted entries can
+The store lives in a subdirectory named after the state format (`bucket4j-v2`). Persisted entries can
 only be read back by code that still has a marshaller for them, so a change of bucket representation
 would otherwise make every request touching an old key fail with
 `No marshaller registered for Protobuf type ...`. Bumping `STATE_FORMAT` in `InfinispanConfig` on such
 a change starts a clean store instead; the previous directory becomes inert and can be deleted. This
-is what happened moving from the hand-written buckets to Bucket4j - an existing `data/` and `index/`
-pair from before that change is dead weight and safe to remove.
+is what happened moving from the hand-written buckets to Bucket4j (`bucket4j-v1`), and again moving to
+Infinispan 16, whose store a 15.x node wrote cannot be assumed readable (`bucket4j-v2`). The older
+directories are dead weight and safe to remove.
 
 Writes are **write-behind** (`async().enable()`), so a hard kill can lose the last few writes and
 leave a quota slightly over-permissive; in exchange a check never waits on the disk. `preload` is off:
@@ -140,14 +141,14 @@ only in how members are *discovered*:
 
 | `ratelimiter.jgroups-config` | discovery | where |
 |---|---|---|
-| `default-configs/default-jgroups-tcp.xml` (default) | MPING (multicast) | local, dev |
-| `default-configs/default-jgroups-kubernetes.xml` | DNS_PING | OpenShift |
+| `org/infinispan/configuration/default-jgroups-tcp.xml` (default) | MPING (multicast) | local, dev |
+| `org/infinispan/configuration/default-jgroups-kubernetes.xml` | DNS_PING | OpenShift |
 
 So the default still discovers over multicast even though the data path is TCP. On OpenShift switch
 the file and point DNS_PING at the headless service:
 
 ```
--Dratelimiter.jgroups-config=default-configs/default-jgroups-kubernetes.xml
+-Dratelimiter.jgroups-config=org/infinispan/configuration/default-jgroups-kubernetes.xml
 -Djgroups.dns.query=rate-limiter-headless.my-namespace.svc.cluster.local
 ```
 
@@ -174,10 +175,17 @@ and replicated, and Bucket4j's entry processor being shipped to the owner.
 starter otherwise leaves it as `JavaSerializationMarshaller`, and the first time a bucket key is owned
 by another node the shipped entry processor is refused by the deserialization allow list
 (`ISPN000936`) - a failure a single node never sees. Check the startup log for
-`ISPN000556: Starting user marshaller 'org.infinispan.commons.marshall.ProtoStreamMarshaller'`. Note
-also that a marshaller passed in explicitly does not pick up `addContextInitializer`; the schema is
-registered on the marshaller instance instead - here Bucket4j's own
-`Bucket4jProtobufContextInitializer`, which covers its processor and result types.
+`ISPN000556: Starting user marshaller 'org.infinispan.commons.marshall.ProtoStreamMarshaller'`.
+
+Bucket4j's schema - `Bucket4jProtobufContextInitializer`, covering its processor and result types - is
+supplied as a configured context initializer (`serialization().addContextInitializer(...)`), which
+registers it in both the user and the global ProtoStream context. The global one is what matters:
+since Infinispan 16, a ProtoStream user marshaller makes the global marshaller bypass the user
+marshaller entirely (`GlobalMarshaller.skipUserMarshaller`) and write user objects with the global
+context. Registering the schema on the marshaller instance instead - the Infinispan 15 arrangement,
+where an explicitly supplied marshaller ignored `addContextInitializer` - leaves the global context
+without it and every cross-node bucket operation fails with
+`No marshaller registered for object of Java type ... InfinispanProcessor`.
 
 Bucket state itself is stored as `byte[]`: Bucket4j serialises its own state, so the cache never sees
 an application type. That is why this project no longer defines any `@Proto` records or a ProtoStream

@@ -4,8 +4,9 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-A distributed token-bucket rate limiter: Spring Boot 3 (Java 21), embedded Infinispan for the shared
-bucket state, API generated from an OpenAPI spec. See README.md for the user-facing description.
+A distributed token-bucket rate limiter: Spring Boot 4 (Java 21), embedded Infinispan 16 for the
+shared bucket state, API generated from an OpenAPI spec. See README.md for the user-facing
+description.
 
 ## Commands
 
@@ -35,14 +36,20 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 - **Bucket keys are `<resource>@<identifier>`** (`RateLimiter.bucketName`). Anything that touches the
   cache key format touches every running node's data.
 - **The algorithm is Bucket4j**, distributed over the Infinispan cache via `InfinispanProxyManager`.
+  The `ReadWriteMap` it runs on comes from `FunctionalMap.create(cache.getAdvancedCache())` - Infinispan
+  16 made `ReadWriteMapImpl`/`FunctionalMapImpl.create` package-private.
   Refill is stepwise (`refillIntervally`, whole `refill-tokens` per `refill-period`), not the smooth
   `refillGreedy` drip. Policies become `BucketConfiguration`s once at startup in `core/RateLimiter`.
 - **The user marshaller must stay ProtoStream**, with Bucket4j's `Bucket4jProtobufContextInitializer`
-  registered on the marshaller instance (an explicitly supplied marshaller ignores
-  `addContextInitializer`). The starter's default is `JavaSerializationMarshaller`, under which any
-  cross-node bucket operation dies with ISPN000936 - invisible on a single node, which is what
-  `ClusteredMarshallingTest` exists to catch. Anything touching marshalling or clustering needs that
-  two-node test, not just the unit tests.
+  added as a configured context initializer (`serialization().addContextInitializer(...)`), which
+  lands in both the user and the global ProtoStream context. Since Infinispan 16 a ProtoStream user
+  marshaller makes the global marshaller skip the user marshaller and write user objects with the
+  global context, so registering the schema on the marshaller instance instead - the Infinispan 15
+  arrangement - fails every cross-node bucket operation with "No marshaller registered for object of
+  Java type ... InfinispanProcessor". The starter's default marshaller is `JavaSerializationMarshaller`,
+  under which cross-node operations die with ISPN000936 instead - invisible on a single node, which is
+  what `ClusteredMarshallingTest` exists to catch. Anything touching marshalling or clustering needs
+  that two-node test, not just the unit tests.
 - **All mutation happens inside Bucket4j's entry processor**, which runs on the key's primary owner -
   that is what makes refill-and-consume atomic across the cluster. Do not read a bucket, decide, and
   write it back. Values in the cache are `byte[]` (Bucket4j serialises its own state), so the project
@@ -57,7 +64,9 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
   is meaningless after a restart and wrong across machines.
 - **The JGroups transport is TCP** (`ratelimiter.jgroups-config`), not Infinispan's UDP default -
   multicast is unavailable on OpenShift. The bundled TCP stack still *discovers* over multicast
-  (MPING), so OpenShift needs `default-jgroups-kubernetes.xml` (DNS_PING) plus `jgroups.dns.query`.
+  (MPING), so OpenShift needs `org/infinispan/configuration/default-jgroups-kubernetes.xml` (DNS_PING)
+  plus `jgroups.dns.query`. Infinispan 16 moved the bundled stacks from `default-configs/` to
+  `org/infinispan/configuration/`; the old path fails startup with ISPN000365.
   Do not go back to the UDP stack to silence a local warning.
 - **A change to the persisted bucket representation needs `STATE_FORMAT` bumped** in
   `InfinispanConfig`. The store is a subdirectory named after it, because old entries whose marshaller

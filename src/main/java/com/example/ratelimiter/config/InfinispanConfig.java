@@ -26,7 +26,7 @@ public class InfinispanConfig {
      * "No marshaller registered for Protobuf type ...". Bumping this on a format change starts a
      * clean store instead; the old directory is then inert and can be deleted at leisure.
      */
-    private static final String STATE_FORMAT = "bucket4j-v1";
+    private static final String STATE_FORMAT = "bucket4j-v2";
 
     /** Nodes only cluster with nodes of the same name; keep environments apart with this. */
     private final String clusterName;
@@ -43,7 +43,7 @@ public class InfinispanConfig {
             @Value("${ratelimiter.cluster-name:rate-limiter}") String clusterName,
             @Value("${ratelimiter.persistence.location:./data/rate-limiter}") String persistenceLocation,
             @Value("${ratelimiter.persistence.enabled:true}") boolean persistenceEnabled,
-            @Value("${ratelimiter.jgroups-config:default-configs/default-jgroups-tcp.xml}") String jgroupsConfig) {
+            @Value("${ratelimiter.jgroups-config:org/infinispan/configuration/default-jgroups-tcp.xml}") String jgroupsConfig) {
         this.clusterName = clusterName;
         this.persistenceLocation = persistenceLocation;
         this.persistenceEnabled = persistenceEnabled;
@@ -77,11 +77,16 @@ public class InfinispanConfig {
                 .addProperty("configurationFile", jgroupsConfig);
         // The Spring Boot starter otherwise leaves the user marshaller as JavaSerializationMarshaller,
         // which cannot marshal Bucket4j's entry processor across nodes (ISPN000936, blocked by the
-        // deserialization allow list). An explicitly supplied marshaller does not pick up
-        // addContextInitializer, so Bucket4j's schema is registered on the instance itself.
-        ProtoStreamMarshaller marshaller = new ProtoStreamMarshaller();
-        marshaller.register(new Bucket4jProtobufContextInitializer());
-        builder.serialization().marshaller(marshaller);
+        // deserialization allow list). With a ProtoStream user marshaller, Infinispan 16 stops routing
+        // user objects through that marshaller at all (GlobalMarshaller.skipUserMarshaller) and writes
+        // them with the global ProtoStream context instead - so Bucket4j's schema has to be a
+        // configured context initializer, which lands in both the user and the global context.
+        // Registering it on the marshaller instance alone (the Infinispan 15 arrangement) leaves the
+        // global context without it, and every cross-node bucket operation dies with
+        // "No marshaller registered for object of Java type ... InfinispanProcessor".
+        builder.serialization()
+                .marshaller(new ProtoStreamMarshaller())
+                .addContextInitializer(new Bucket4jProtobufContextInitializer());
         builder.cacheContainer().statistics(true);
         if (persistenceEnabled) {
             // A file store resolves its relative paths against global state, which is off by default.

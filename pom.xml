@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.5</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -19,7 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <infinispan.version>15.2.1.Final</infinispan.version>
+        <infinispan.version>16.2.3</infinispan.version>
         <bucket4j.version>8.19.0</bucket4j.version>
         <openapi-generator.version>7.14.0</openapi-generator.version>
     </properties>
@@ -50,10 +50,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Embedded Infinispan + Spring Boot 3 integration -->
+        <!-- Embedded Infinispan + Spring Boot 4 integration. The boot3 starter targets Spring Boot 3's
+             autoconfiguration packages and fails on Boot 4 (CacheAutoConfiguration moved), so the
+             boot4 artifact is the one to use here; it first ships with Infinispan 16. -->
         <dependency>
             <groupId>org.infinispan</groupId>
-            <artifactId>infinispan-spring-boot3-starter-embedded</artifactId>
+            <artifactId>infinispan-spring-boot4-starter-embedded</artifactId>
         </dependency>
 
         <!-- Token-bucket algorithm + its Infinispan grid backend. infinispan-core is `provided` in
@@ -82,6 +84,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Spring Boot 4 split the web test slices out of spring-boot-starter-test; MockMvc and
+             @AutoConfigureMockMvc live here now. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -127,7 +136,8 @@
                             <generateApiTests>false</generateApiTests>
                             <generateModelTests>false</generateModelTests>
                             <configOptions>
-                                <useSpringBoot3>true</useSpringBoot3>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
                                 <useJakartaEe>true</useJakartaEe>
                                 <delegatePattern>true</delegatePattern>
                                 <useTags>true</useTags>

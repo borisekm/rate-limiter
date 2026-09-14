@@ -12,9 +12,8 @@ import io.github.bucket4j.distributed.BucketProxy;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
 import io.github.bucket4j.grid.infinispan.Bucket4jInfinispan;
 import org.infinispan.Cache;
+import org.infinispan.functional.FunctionalMap;
 import org.infinispan.functional.FunctionalMap.ReadWriteMap;
-import org.infinispan.functional.impl.FunctionalMapImpl;
-import org.infinispan.functional.impl.ReadWriteMapImpl;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -48,8 +47,10 @@ public class RateLimiter {
     RateLimiter(Cache<String, byte[]> buckets, RateLimiterProperties props, Clock clock) {
         this.props = props;
         this.clock = clock;
+        // Infinispan 16 made the functional-map implementation classes package-private; this is the
+        // public route to the same read-write map Bucket4j's entry processor runs on.
         ReadWriteMap<String, byte[]> readWriteMap =
-                ReadWriteMapImpl.create(FunctionalMapImpl.create(buckets.getAdvancedCache()));
+                FunctionalMap.create(buckets.getAdvancedCache()).toReadWriteMap();
         this.proxyManager = Bucket4jInfinispan.entryProcessorBasedBuilder(readWriteMap)
                 .clientClock(wallClock())
                 .build();
