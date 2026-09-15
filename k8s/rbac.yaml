@@ -1,0 +1,44 @@
+# KUBE_PING discovers peers by asking the API server which pods carry the app's labels, so the
+# pods need an identity that is allowed to ask. Without this the API call is refused with 403,
+# discovery finds nobody, and every pod quietly forms a cluster of one.
+#
+# `get` and `list` on pods, in this namespace only - a Role, never a ClusterRole.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rate-limiter
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rate-limiter-pod-reader
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rate-limiter-pod-reader
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rate-limiter-pod-reader
+subjects:
+  # Must name the ServiceAccount the pods actually run as. If the central chart does not let us
+  # set `serviceAccountName` on the Deployment, its pods run as `default` - bind that one instead:
+  #
+  #   - kind: ServiceAccount
+  #     name: default
+  - kind: ServiceAccount
+    name: rate-limiter

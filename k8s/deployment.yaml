@@ -1,0 +1,108 @@
+# A Deployment, not a StatefulSet: the platform gives these pods no volume, so there is no
+# per-pod store to keep an identity for. Buckets live in memory and are replicated across the
+# cluster (numOwners=2), which is what carries them through a rolling restart; a simultaneous
+# stop of every pod resets the quotas. See k8s/README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limiter
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rate-limiter
+      app.kubernetes.io/instance: rate-limiter
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0        # never drop below the running replica count: the surviving pods are
+      maxSurge: 1              # what hands the bucket state over to the new ones
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        # These two are the contract with everything else here: the platform's Service selects on
+        # them, and KUBE_PING uses app.kubernetes.io/name as its label selector when it asks the
+        # API server for peers. Changing them means changing jgroups-kubeping.xml too.
+        app.kubernetes.io/name: rate-limiter
+        app.kubernetes.io/instance: rate-limiter
+    spec:
+      serviceAccountName: rate-limiter    # allowed to list pods - see rbac.yaml
+      # Spread the replicas, but do not insist: with no node-local store there is nothing to lose
+      # by two pods sharing a node, and a hard requirement would leave a replica Pending on a
+      # small cluster.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: rate-limiter
+                topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        # No runAsUser: OpenShift's restricted SCC assigns the UID, and a hardcoded one is rejected.
+        # The image needs no writable path of its own now that the bucket store is gone.
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rate-limiter
+          image: rate-limiter:0.1.0-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          # Fixed numbers, not names: the platform's Service targets ports by number.
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: actuator
+              containerPort: 8081
+            - name: jgroups
+              containerPort: 7800
+            - name: jgroups-fd
+              containerPort: 57800     # FD_SOCK2 = bind port + the stack's 50000 offset
+          envFrom:
+            - configMapRef:
+                name: rate-limiter-config
+          env:
+            # Answered-by identity: surfaces in the X-Served-By response header.
+            - name: RATELIMITER_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Actuator is on its own port (8081), which is how the chart's Service publishes it.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: actuator
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: actuator
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            # The root filesystem is read-only; the JVM still wants a scratch directory.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      # A leaving pod hands its segments to the others; give the rebalance a moment.
+      terminationGracePeriodSeconds: 45

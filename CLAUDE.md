@@ -64,10 +64,27 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
   is meaningless after a restart and wrong across machines.
 - **The JGroups transport is TCP** (`ratelimiter.jgroups-config`), not Infinispan's UDP default -
   multicast is unavailable on OpenShift. The bundled TCP stack still *discovers* over multicast
-  (MPING), so OpenShift needs `org/infinispan/configuration/default-jgroups-kubernetes.xml` (DNS_PING)
-  plus `jgroups.dns.query`. Infinispan 16 moved the bundled stacks from `default-configs/` to
-  `org/infinispan/configuration/`; the old path fails startup with ISPN000365.
+  (MPING), so a cluster needs a different stack. Infinispan 16 moved the bundled stacks from
+  `default-configs/` to `org/infinispan/configuration/`; the old path fails startup with ISPN000365.
   Do not go back to the UDP stack to silence a local warning.
+- **On Kubernetes discovery is KUBE_PING, not DNS_PING** (`src/main/resources/jgroups-kubeping.xml`,
+  `org.jgroups.kubernetes:jgroups-kubernetes`). The target namespace's Service comes from a central
+  Helm chart and is a plain ClusterIP: its DNS answers with the virtual IP, so DNS_PING discovery is
+  load-balanced to one arbitrary pod and every pod forms a cluster of one - which looks like a
+  working service until you count. KUBE_PING asks the API server for pods by label instead, so it
+  needs `k8s/rbac.yaml` (`get`/`list` on pods; a 403 means nobody finds anybody), a bind port fixed
+  at 7800, and pod labels matching the selector in the stack file. The namespace comes from
+  `config/PodNamespace`, which reads the ServiceAccount mount rather than requiring a downward-API
+  env var. `KubePingStackTest` parses the stack: it is loaded only inside a pod, so a typo there is
+  otherwise invisible until deployment. Switch back to `default-jgroups-kubernetes.xml` + DNS_PING
+  only alongside a headless Service.
+- **The OpenShift shape lives in `application.yml`, not in the pod spec.** A second document guarded
+  by `spring.config.activate.on-cloud-platform: kubernetes` moves the app to port 8080 with the
+  actuator on 8081, selects the KUBE_PING stack, and turns persistence off. We do not own the
+  Deployment in the target namespace, so anything the app can settle for itself is one less thing to
+  negotiate - keep new deployment-shaped settings there rather than in `k8s/configmap.yaml`. Local
+  runs and the tests are unaffected: the document activates only when `KUBERNETES_SERVICE_HOST` is
+  set.
 - **A change to the persisted bucket representation needs `STATE_FORMAT` bumped** in
   `InfinispanConfig`. The store is a subdirectory named after it, because old entries whose marshaller
   no longer exists fail every request that touches such a key with "No marshaller registered for
@@ -75,7 +92,10 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
   changed format means: bump, and the old directory is inert.
 - **Buckets are persisted** to a per-node `SoftIndexFileStore` (`ratelimiter.persistence.location`).
   Two nodes must never share a location. The store is not shared, so a restart with a different node
-  count can orphan buckets - see README before changing anything here.
+  count can orphan buckets - see README before changing anything here. On Kubernetes the store is off
+  (the chart's pods get no volume) and buckets survive only a rolling restart, carried by the second
+  owner; do not "fix" that with a store on the container filesystem, which is a fresh empty store on
+  every restart and, worse, a shared one if two pods land on one node.
 
 ## Testing
 
@@ -97,6 +117,10 @@ adapter is a virtual NIC multicast never crosses, so the nodes each form a clust
 shared-bucket assertions fail on that machine only. `ClusteredMarshallingTest.awaitOneClusterOfTwo`
 asserts the two nodes actually found each other, so that failure names itself instead of surfacing as
 a confusing assertion in the test body.
+
+`KubePingStackTest` builds a JChannel from the production Kubernetes stack without binding a socket
+or calling the API server, which is enough to catch a misspelled protocol, a missing
+jgroups-kubernetes jar, or a bind port left at 0.
 
 `RateLimitApiTest` is the Spring context test over MockMvc: the wire contract plus proof that
 configuration binding works. After changing configuration binding, run it - and for anything involving

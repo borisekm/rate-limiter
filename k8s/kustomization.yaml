@@ -1,13 +1,18 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: rate-limiter
+namespace: sa-t
 resources:
+  # On sa-t, drop namespace.yaml (it exists) and service.yaml (the central chart owns it).
   - namespace.yaml
-  - storage.yaml
+  - rbac.yaml
   - configmap.yaml
   - service.yaml
-  - statefulset.yaml
+  - deployment.yaml
 images:
+  # Test cluster only. On sa-t the image comes from the platform registry, so this becomes a plain
+  #   - name: rate-limiter
+  #     newName: <registry>/sa-t/rate-limiter
+  #     newTag: <version>
   # Per-node registry on the worker's own loopback - containerd resolves a localhost
   # reference over plain HTTP, so no node needs certs.d configuration. See README.md.
   # Pinned by digest, not by tag: the tag does not change between rebuilds, so a node with

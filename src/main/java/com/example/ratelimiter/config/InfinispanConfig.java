@@ -66,12 +66,15 @@ public class InfinispanConfig {
      */
     @Bean
     InfinispanGlobalConfigurer globalConfigurer() {
+        // Before the transport starts: the Kubernetes stack discovers peers by asking the API server
+        // for the pods in this namespace, and this is where it learns which namespace that is.
+        PodNamespace.publishAsSystemProperty();
         GlobalConfigurationBuilder builder = new GlobalConfigurationBuilder()
                 .clusteredDefault();
         // TCP rather than the clusteredDefault() UDP stack: multicast is unavailable on OpenShift and
         // most cloud networks, so this is the transport we deploy on. The bundled TCP stack still
-        // discovers members with MPING (multicast), which works locally but not on OpenShift - switch
-        // ratelimiter.jgroups-config there, see README.
+        // discovers members with MPING (multicast), which works locally but not on OpenShift, where
+        // ratelimiter.jgroups-config selects jgroups-kubeping.xml instead; see README.
         builder.transport()
                 .clusterName(clusterName)
                 .addProperty("configurationFile", jgroupsConfig);

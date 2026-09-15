@@ -1,0 +1,93 @@
+<!--
+   OpenShift/Kubernetes stack: Infinispan's bundled default-jgroups-kubernetes.xml with DNS_PING
+   swapped for kubernetes.KUBE_PING (org.jgroups.kubernetes:jgroups-kubernetes).
+
+   DNS_PING needs a headless Service, whose DNS record answers with one A record per pod. Where the
+   platform only hands out a normal ClusterIP Service, its DNS answers with the single virtual IP -
+   kube-proxy then load-balances the discovery request to one arbitrary pod, so members never find
+   each other and every pod forms a cluster of one. KUBE_PING sidesteps DNS: it asks the API server
+   for the pods matching `labels` in `namespace` and pings their pod IPs directly.
+
+   What it needs to work:
+     - The pod's ServiceAccount must be allowed to list/get pods in its own namespace (k8s/rbac.yaml).
+       Without it the API call comes back 403 and discovery finds nobody.
+     - `namespace`: deliberately not set here. KUBE_PING resolves it from the KUBERNETES_NAMESPACE
+       system property or environment variable, and InfinispanConfig sets that property from the
+       ServiceAccount's own namespace file, so no downward-API env var is required.
+     - `masterHost`/`masterPort` are likewise left to KUBE_PING, which reads KUBERNETES_SERVICE_HOST
+       and KUBERNETES_SERVICE_PORT - injected into every pod by the kubelet.
+     - TCP bind_port must be non-zero: KUBE_PING pings <pod ip>:<bind_port>, it cannot discover a
+       port the transport picked at random.
+
+   Selected with ratelimiter.jgroups-config; see README.
+-->
+<config xmlns="urn:org:jgroups"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups-5.5.xsd">
+
+   <TCP bind_addr="${jgroups.bind.address:SITE_LOCAL}"
+        bind_port="${jgroups.bind.port,jgroups.tcp.port:7800}"
+        port_range="${jgroups.port_range:0}"
+
+        diag.enabled="${jgroups.diag.enabled:false}"
+        diag.enable_tcp="${jgroups.diag.enable_tcp:true}"
+        diag.enable_udp="${jgroups.diag.enable_udp:false}"
+
+        thread_naming_pattern="pl"
+        send_buf_size="640k"
+        sock_conn_timeout="300ms"
+        linger="${jgroups.tcp.linger:-1}"
+        tcp_nodelay="${jgroups.tcp_nodelay:true}"
+        bundler_type="${jgroups.bundler.type:transfer-queue}"
+        bundler.max_size="${jgroups.bundler.max_size:64k}"
+        non_blocking_sends="${jgroups.non_blocking_sends:false}"
+
+        thread_pool.min_threads="${jgroups.thread_pool.min_threads:0}"
+        thread_pool.max_threads="${jgroups.thread_pool.max_threads:200}"
+        thread_pool.keep_alive_time="1m"
+        thread_pool.thread_dumps_enabled="${jgroups.thread_dumps_enabled:false}"
+
+        use_vthreads="${jgroups.thread.virtual,org.infinispan.threads.virtual:true}"
+   />
+   <RED/>
+   <!-- The label selector must match the pods of this deployment, and nothing else: every pod it
+        returns is contacted on the bind port. useNotReadyAddresses stays on (its default) - a pod
+        is not ready until Infinispan has joined, so without it members could never discover each
+        other. port_range 0 means "only the bind port", no speculative neighbours. -->
+   <kubernetes.KUBE_PING labels="${jgroups.kubernetes.labels:app.kubernetes.io/name=rate-limiter}"
+                         port_range="0"
+                         num_discovery_runs="3"
+   />
+   <MERGE3 min_interval="10s"
+           max_interval="30s"
+   />
+   <FD_SOCK2 offset="${jgroups.fd.port-offset:50000}"/>
+   <FD_ALL3/>
+   <VERIFY_SUSPECT2 timeout="1s"/>
+   <pbcast.NAKACK2 use_mcast_xmit="false"
+                   xmit_interval="200ms"
+                   xmit_table_num_rows="50"
+                   xmit_table_msgs_per_row="1024"
+                   xmit_table_max_compaction_time="30s"
+                   resend_last_seqno="true"
+   />
+   <UNICAST3 conn_close_timeout="5s"
+             xmit_interval="200ms"
+             xmit_table_num_rows="50"
+             xmit_table_msgs_per_row="1024"
+             xmit_table_max_compaction_time="30s"
+   />
+   <pbcast.STABLE desired_avg_gossip="5s"
+                  max_bytes="1M"
+   />
+   <pbcast.GMS print_local_addr="false"
+               join_timeout="${jgroups.join_timeout:2s}"
+   />
+   <UFC max_credits="${jgroups.max_credits:4m}"
+        min_threshold="0.40"
+   />
+   <MFC max_credits="${jgroups.max_credits:4m}"
+        min_threshold="0.40"
+   />
+   <FRAG4 frag_size="${jgroups.frag_size:60k}"/>
+</config>

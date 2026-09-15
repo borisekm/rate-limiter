@@ -1,4 +1,6 @@
+# The namespace the central chart deploys into. On sa-t it already exists and is not ours to
+# create - drop this from kustomization.yaml there.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: rate-limiter
+  name: sa-t

@@ -1,39 +1,63 @@
-# Headless service: the DNS record DNS_PING resolves to find cluster members.
-# publishNotReadyAddresses is essential - a starting pod is not ready until Infinispan has
-# joined, so without it members can never discover each other and each forms a cluster of one.
-apiVersion: v1
-kind: Service
-metadata:
-  name: rate-limiter-headless
-  labels:
-    app: rate-limiter
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: true
-  selector:
-    app: rate-limiter
-  ports:
-    - name: jgroups
-      port: 7800
-      targetPort: jgroups
-    - name: jgroups-fd
-      port: 57800          # FD_SOCK2: bind port + the stack's 50000 offset
-      targetPort: 57800
----
-# Client-facing service. NodePort because this cluster has no ingress controller:
-# reach it on http://<any node IP>:30851/v1/rate/check
+# On sa-t this object belongs to the central Helm chart (bmf.brz.gv.at/managed-by:
+# central-helmchart) - do not apply it there, drop it from kustomization.yaml instead. It is kept
+# here so a test cluster can reproduce the same shape the chart produces: a plain ClusterIP
+# Service, not a headless one, which is the whole reason discovery is KUBE_PING rather than
+# DNS_PING - a ClusterIP's DNS answers with the virtual IP, and kube-proxy would send every
+# discovery request to one arbitrary pod.
+#
+# The chart's `clusterIP` and the bmf.brz.gv.at/* labels are omitted: they are assigned, not
+# authored. What must match is the selector and the port numbers.
 apiVersion: v1
 kind: Service
 metadata:
   name: rate-limiter
   labels:
-    app: rate-limiter
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+  ports:
+    - name: tcp-8080
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: actuator-8081
+      protocol: TCP
+      port: 8081
+      targetPort: 8081
+    - name: debug-8090
+      protocol: TCP
+      port: 8090
+      targetPort: 8090
+    - name: jgroups-tcp7800
+      protocol: TCP
+      port: 7800
+      targetPort: 7800
+    - name: jgroups-fd-57800
+      protocol: TCP
+      port: 57800
+      targetPort: 57800
+---
+# Test-cluster only: the chart's Service is ClusterIP, so there is no counterpart to this on sa-t
+# (there a Route or the platform's ingress publishes the app). Reach it on
+# http://<any node IP>:30851/v1/rate/check
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiter-nodeport
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
 spec:
   type: NodePort
   selector:
-    app: rate-limiter
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
   ports:
     - name: http
-      port: 8051
-      targetPort: http
+      port: 8080
+      targetPort: 8080
       nodePort: 30851

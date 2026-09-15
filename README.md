@@ -101,6 +101,13 @@ plain Deployment loses buckets whenever pods move or scale. If quotas must hold 
 **shared** store instead - add `org.infinispan:infinispan-cachestore-jdbc` (the imported BOM supplies
 the version), point every node at one database and set `.shared(true)`.
 
+On OpenShift the store is therefore **off** (`ratelimiter.persistence.enabled: false`, set in the
+Kubernetes document of `application.yml`): the central Helm chart that owns the Deployment gives the
+pods no volume, and a store on the container filesystem would be a different, empty store after every
+restart anyway. Buckets then live in memory with two owners, so a *rolling* restart carries them over
+- the surviving pods hand their segments to the new ones - while a simultaneous stop of every pod
+resets the quotas. See [k8s/README.md](k8s/README.md).
+
 Refill anchors are epoch milliseconds, not `System.nanoTime()`, precisely so that persisted state
 still means something in a new JVM - and so that nodes on different machines agree, which they did not
 before.
@@ -142,15 +149,32 @@ only in how members are *discovered*:
 | `ratelimiter.jgroups-config` | discovery | where |
 |---|---|---|
 | `org/infinispan/configuration/default-jgroups-tcp.xml` (default) | MPING (multicast) | local, dev |
-| `org/infinispan/configuration/default-jgroups-kubernetes.xml` | DNS_PING | OpenShift |
+| `jgroups-kubeping.xml` | KUBE_PING (Kubernetes API) | OpenShift |
+| `org/infinispan/configuration/default-jgroups-kubernetes.xml` | DNS_PING (headless service) | Kubernetes, given a headless service |
 
-So the default still discovers over multicast even though the data path is TCP. On OpenShift switch
-the file and point DNS_PING at the headless service:
+So the default still discovers over multicast even though the data path is TCP. On Kubernetes the app
+switches itself to `jgroups-kubeping.xml`, in the `application.yml` document guarded by
+`spring.config.activate.on-cloud-platform: kubernetes` - no environment variable needed, which
+matters when the Deployment comes from a chart we do not own.
+
+**Why KUBE_PING and not DNS_PING.** DNS_PING needs a *headless* Service, whose DNS record answers
+with one A record per pod. The Service we are given on OpenShift is a plain ClusterIP with a virtual
+IP, whose DNS answers with that one address - kube-proxy then load-balances the discovery request to
+a single arbitrary pod, so members never see each other and every pod forms a cluster of one.
+KUBE_PING skips DNS and asks the API server for the pods matching a label selector, then pings their
+pod IPs directly. It costs one dependency (`org.jgroups.kubernetes:jgroups-kubernetes`) and a Role
+letting the pod's ServiceAccount `list` pods in its own namespace; without that Role the API call is
+refused with 403 and, again, nobody finds anybody. Where a headless service *is* available, DNS_PING
+is the simpler choice:
 
 ```
 -Dratelimiter.jgroups-config=org/infinispan/configuration/default-jgroups-kubernetes.xml
 -Djgroups.dns.query=rate-limiter-headless.my-namespace.svc.cluster.local
 ```
+
+`KubePingStackTest` parses `jgroups-kubeping.xml` and asserts KUBE_PING is really in it - the stack
+is selected only inside a pod, and a mistake there shows up as pods that start happily and each form
+a cluster of one.
 
 JGroups binds port 7800 and takes the next free one when it is busy, so several nodes can share a
 host (`ISPN000079` in the log names the port a node actually took).
@@ -209,5 +233,9 @@ Every response carries an `X-Served-By` header naming the node that answered (th
 Kubernetes, the hostname otherwise; override with `ratelimiter.instance-id`). It is a header and not
 a response field because the response schema belongs to the API contract.
 
-`k8s/` deploys two clustered nodes as a StatefulSet - a volume per pod, DNS_PING discovery instead
-of multicast, and a NodePort for clients. See [k8s/README.md](k8s/README.md).
+`k8s/` deploys two clustered nodes as a Deployment, shaped for an OpenShift namespace whose Service
+and Deployment come from a central Helm chart: ports 8080 (traffic) and 8081 (actuator), KUBE_PING
+discovery plus the Role it needs, and no volume. See [k8s/README.md](k8s/README.md).
+
+Locally the app stays on 8051 with its store intact; the Kubernetes settings apply only when Spring
+detects the platform, which it does from the `KUBERNETES_SERVICE_HOST` every pod gets.

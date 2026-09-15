@@ -53,3 +53,37 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+---
+# --- OpenShift / Kubernetes -------------------------------------------------------------------
+# Activated by Spring's own cloud-platform detection (KUBERNETES_SERVICE_HOST is injected into
+# every pod), not by a profile or an environment variable. That matters here: the Deployment comes
+# from a central Helm chart we do not own, so anything the app can settle for itself is one less
+# thing to negotiate. Every value below can still be overridden per environment.
+spring:
+  config:
+    activate:
+      on-cloud-platform: kubernetes
+
+# The chart's Service publishes 8080 (traffic) and 8081 (actuator) by number, so those are the
+# ports the container has to listen on - see k8s/README.md.
+server:
+  port: 8080
+management:
+  server:
+    port: 8081
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+ratelimiter:
+  # KUBE_PING, because the Service we are given is a ClusterIP with a virtual IP rather than a
+  # headless one; see the header of jgroups-kubeping.xml.
+  jgroups-config: jgroups-kubeping.xml
+  persistence:
+    # The chart gives pods no volume, and the SoftIndexFileStore must never be shared between
+    # nodes - a store on the container filesystem would be a different, empty store after every
+    # restart anyway. Buckets therefore live in memory, replicated (numOwners=2) across the
+    # cluster: a rolling restart keeps them, a full stop of every pod resets quotas.
+    enabled: false
