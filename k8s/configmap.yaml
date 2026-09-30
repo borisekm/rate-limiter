@@ -1,5 +1,5 @@
-# What is left to configure per environment. Most of the OpenShift shape - ports 8080/8081, the
-# KUBE_PING stack, persistence off - the application settles for itself in application.yml, under
+# What is left to configure per environment. Most of the OpenShift shape - ports 8080/8081, TLS to
+# Data Grid with the service CA - the application settles for itself in application.yml, under
 # `spring.config.activate.on-cloud-platform: kubernetes`, precisely because the Deployment comes
 # from a chart we do not own. Everything here is an override on top of that, and Spring binds
 # RATELIMITER_X_Y -> ratelimiter.x.y.
@@ -11,21 +11,21 @@ metadata:
     app.kubernetes.io/name: rate-limiter
     app.kubernetes.io/instance: rate-limiter
 data:
-  # Nodes only cluster with nodes of the same name - keep environments apart with this. A pod that
-  # discovers a peer from another stage still refuses to join it.
-  RATELIMITER_CLUSTER_NAME: "rate-limiter-sa-t"
+  # The Data Grid cluster's Service in this namespace: the operator names it after the Infinispan
+  # CR (`oc get infinispan`), port 11222. The name is also what the TLS certificate is checked
+  # against, so use the Service name, not an IP.
+  RATELIMITER_INFINISPAN_SERVERS: "datagrid:11222"
+
+  # The answer while Data Grid cannot be reached: "allow" (fail open) or "deny" (fail closed).
+  # Chosen per environment on purpose. Degraded answers carry an X-RateLimit-Degraded header and
+  # the app logs a warning at most every 30s while it lasts.
+  RATELIMITER_WHEN_STORE_UNAVAILABLE: "deny"
+
+  # Credentials are not here: RATELIMITER_INFINISPAN_USERNAME / _PASSWORD come from a Secret,
+  # see README.md.
 
   # Heap ceiling inside the container limit.
   JAVA_OPTS: "-XX:MaxRAMPercentage=75"
-
-  # Discovery is KUBE_PING: the app asks the API server for the pods carrying this label selector
-  # and pings their pod IPs on 7800. The namespace comes from the pod's own ServiceAccount mount,
-  # the API server address from KUBERNETES_SERVICE_HOST/PORT - neither needs configuring here.
-  #
-  # Override only if the pod labels differ from the default in jgroups-kubeping.xml. It has to
-  # select this deployment's pods and no others; every pod it returns gets contacted.
-  # JGROUPS_KUBERNETES_LABELS is not read by JGroups - pass it as a -D flag if you need it:
-  #   JAVA_OPTS: "-XX:MaxRAMPercentage=75 -Djgroups.kubernetes.labels=app.kubernetes.io/name=rate-limiter"
 
   # The chart's Service also publishes a debug port (8090). Uncomment to actually listen on it:
   # JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:8090"

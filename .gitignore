@@ -20,9 +20,6 @@ build/
 .idea/
 *.iml
 
-# Persisted bucket state (ratelimiter.persistence.location)
-data/
-
 # Logs and local configuration
 *.log
 .env

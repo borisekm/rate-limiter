@@ -15,14 +15,13 @@
     <artifactId>rate-limiter</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>rate-limiter</name>
-    <description>Distributed token-bucket rate limiter backed by embedded Infinispan</description>
+    <description>Distributed token-bucket rate limiter backed by a remote Infinispan / Data Grid</description>
 
     <properties>
         <java.version>21</java.version>
         <infinispan.version>16.2.3</infinispan.version>
         <bucket4j.version>8.19.0</bucket4j.version>
         <openapi-generator.version>7.14.0</openapi-generator.version>
-        <jgroups-kubernetes.version>3.0.0.Final</jgroups-kubernetes.version>
     </properties>
 
     <dependencyManagement>
@@ -51,41 +50,22 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Embedded Infinispan + Spring Boot 4 integration. The boot3 starter targets Spring Boot 3's
-             autoconfiguration packages and fails on Boot 4 (CacheAutoConfiguration moved), so the
-             boot4 artifact is the one to use here; it first ships with Infinispan 16. -->
+        <!-- Hot Rod client for the shared bucket cache on a remote Infinispan / Data Grid. Deliberately
+             not the Spring Boot remote starter: the RemoteCacheManager is built by hand in HotRodConfig,
+             where TLS, SASL and the cache definition are spelled out. The client negotiates the
+             protocol version, so this 16.x client talks to older servers (Data Grid 8.x) as well. -->
         <dependency>
             <groupId>org.infinispan</groupId>
-            <artifactId>infinispan-spring-boot4-starter-embedded</artifactId>
+            <artifactId>infinispan-client-hotrod</artifactId>
         </dependency>
 
-        <!-- Token-bucket algorithm + its Infinispan grid backend. infinispan-core is `provided` in
-             bucket4j's own pom, so our 15.2.1 is what it runs against. -->
+        <!-- Token-bucket algorithm. Its bucket4j_jdk17-infinispan module is embedded-only (an entry
+             processor on a functional map), so the remote store is driven through core's generic
+             compare-and-swap proxy manager instead - see core/HotRodProxyManager. -->
         <dependency>
             <groupId>com.bucket4j</groupId>
             <artifactId>bucket4j_jdk17-core</artifactId>
             <version>${bucket4j.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.bucket4j</groupId>
-            <artifactId>bucket4j_jdk17-infinispan</artifactId>
-            <version>${bucket4j.version}</version>
-        </dependency>
-
-        <!-- kubernetes.KUBE_PING: JGroups discovery that asks the Kubernetes API server for the
-             pod IPs behind a label selector. Needed where the platform gives us only a ClusterIP
-             Service - its DNS answers with the virtual IP, so DNS_PING has nothing to find. Built
-             against JGroups 5.5.4, which is what Infinispan 16 brings. The jar's jakarta.json-api
-             dependency is `provided`; Spring Boot manages the same 2.1.3 we add here, and the
-             Parsson implementation comes along transitively. -->
-        <dependency>
-            <groupId>org.jgroups.kubernetes</groupId>
-            <artifactId>jgroups-kubernetes</artifactId>
-            <version>${jgroups-kubernetes.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>jakarta.json</groupId>
-            <artifactId>jakarta.json-api</artifactId>
         </dependency>
 
         <!-- Needed by the generated API code -->
@@ -110,6 +90,13 @@
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- A real Infinispan server for the tests (HotRodTestServer). Not an in-JVM HotRodServer:
+             Infinispan 16's server modules are built for Java 25, and this project is on 21. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -117,20 +104,6 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
-
-            <!-- The default ratelimiter.persistence.location is ./data, so a local run leaves
-                 persisted bucket state behind. Clean it with the rest of the build output. -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-clean-plugin</artifactId>
-                <configuration>
-                    <filesets>
-                        <fileset>
-                            <directory>${project.basedir}/data</directory>
-                        </fileset>
-                    </filesets>
-                </configuration>
             </plugin>
 
             <plugin>

@@ -6,95 +6,81 @@ are not ours to author. What the platform dictates:
 
 | | given by the platform | consequence |
 |---|---|---|
-| Service | plain **ClusterIP**, not headless | DNS_PING cannot discover members - see [Discovery](#discovery) |
-| Ports | 8080 traffic, 8081 actuator, 8090 debug, 7800/57800 JGroups | the app listens on 8080/8081, not 8051 |
+| Service | plain **ClusterIP** | fine: the replicas do not talk to each other, only to Data Grid |
+| Ports | 8080 traffic, 8081 actuator, 8090 debug, 7800/57800 JGroups | the app listens on 8080/8081, not 8051; the JGroups ports are unused |
 | Selector | `app.kubernetes.io/name` + `app.kubernetes.io/instance`, both `rate-limiter` | the pod labels must carry both |
-| Workload | `Deployment`, no volume | no file store; buckets are in memory only |
+| Workload | `Deployment`, no volume | fine: the app is stateless, the buckets live in Data Grid |
+| Data Grid | Red Hat Data Grid 8.6 (operator) in the same namespace | the bucket store - see [Data Grid](#data-grid) |
 
 The app configures itself for all of that: `application.yml` carries a second document guarded by
 `spring.config.activate.on-cloud-platform: kubernetes`, which Spring activates whenever it sees the
 `KUBERNETES_SERVICE_HOST` that the kubelet injects into every pod. Nothing in the pod spec has to be
 set for the service to come up correctly - which is the point, given how little of the pod spec we
-control. A local run or `docker compose up` is untouched and stays on 8051 with its store.
+control. A local run or `docker compose up` is untouched and stays on 8051.
 
 | file | what it holds |
 |---|---|
 | `namespace.yaml` | the `sa-t` namespace - **exists on OpenShift, drop it there** |
-| `rbac.yaml` | ServiceAccount + Role + RoleBinding: `get`/`list` on pods, for KUBE_PING |
-| `configmap.yaml` | what is genuinely per-environment: cluster name, heap, optional overrides |
+| `configmap.yaml` | what is genuinely per-environment: Data Grid address, fail-open/closed, heap |
 | `service.yaml` | a copy of the chart's Service, for test clusters - **the chart owns it on sa-t** |
-| `deployment.yaml` | 2 replicas, no volume, actuator probes on 8081 |
+| `deployment.yaml` | 2 replicas, no volume, actuator probes on 8081, credentials from a Secret |
 | `local-registry/` | lab-only image delivery, see below |
 | `push-image.sh` | build, push to every node's registry, pin the digest |
 
-On `sa-t`, `rbac.yaml` is the only piece that has to be applied alongside the chart; everything else
-is either the chart's or a test-cluster convenience:
+On `sa-t` the chart owns the Deployment and Service, so what has to exist alongside it is the
+ConfigMap values and the credentials Secret.
 
-```bash
-oc apply -n sa-t -f k8s/rbac.yaml
-```
+## Data Grid
 
-If the chart does not let us set `serviceAccountName` on the Deployment, its pods run as the
-namespace's `default` ServiceAccount - point the RoleBinding's subject at that instead. The
-alternative is in the file as a comment.
+The buckets live in a cache on the namespace's Data Grid cluster, reached over Hot Rod. The
+replicas never talk to each other, so there is no clustering, discovery, RBAC or volume on our side.
 
-## Discovery
-
-The bundled TCP stack discovers members over **multicast**, which no cluster routes. The usual
-Kubernetes answer is DNS_PING against a *headless* Service, whose DNS record returns one A record
-per pod. Here the Service is a normal ClusterIP with a virtual IP (`10.245.x.x`), so its DNS returns
-that single address and kube-proxy forwards the discovery request to one arbitrary pod. Members
-never see each other; every pod forms a cluster of one and enforces its own private limits, which
-looks exactly like the service working until you count.
-
-So discovery is **KUBE_PING** (`src/main/resources/jgroups-kubeping.xml`): it asks the API server
-for the pods carrying a label selector and pings their pod IPs on 7800 directly, no DNS involved.
-
-| what it needs | where it comes from |
+| what the app needs | where it comes from |
 |---|---|
-| permission to list pods | `rbac.yaml` - without it the API answers 403 and discovery finds nobody |
-| the namespace | the pod's own ServiceAccount mount, read by `PodNamespace` - no downward-API env var required |
-| the API server address | `KUBERNETES_SERVICE_HOST` / `_PORT`, injected into every pod |
-| a label selector | `app.kubernetes.io/name=rate-limiter`, the default in `jgroups-kubeping.xml` |
-| a fixed bind port | 7800: KUBE_PING pings peers on the transport's bind port, it cannot discover a random one |
+| the server address | `RATELIMITER_INFINISPAN_SERVERS` in `configmap.yaml`: the operator's Service, named after the `Infinispan` CR (`oc get infinispan`), port 11222 |
+| credentials | `RATELIMITER_INFINISPAN_USERNAME` / `_PASSWORD` from the Secret `rate-limiter-datagrid` |
+| trust for the TLS certificate | the operator's default certificate is signed by the OpenShift service CA, which OpenShift mounts into every pod at `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`; `application.yml` points the client there |
+| the cache | the app creates `rate-limit-buckets` on first use if it does not exist (distributed, 2 owners), so the user needs permission to create caches |
 
-The selector has to match this deployment's pods and nothing else - every pod it returns gets
-contacted on 7800. Override it with a system property if the labels differ:
-
-```
--Djgroups.kubernetes.labels=app.kubernetes.io/name=rate-limiter
-```
-
-JGroups reads its `${...}` placeholders as system properties, not environment variables, so an
-override goes into `JAVA_OPTS` as a `-D` flag rather than a plain ConfigMap entry.
-
-Ports: `7800` for the transport, `57800` for `FD_SOCK2` (bind port + the stack's 50000 offset). Both
-are published by the chart's Service.
-
-Confirm the cluster actually formed - this is the line that matters, `(2)` being the member count:
+The Secret, with a Data Grid user that may create caches and read/write them (the operator's
+generated `developer` user can; its password is in `<cr-name>-generated-secret`):
 
 ```bash
-oc -n sa-t logs deployment/rate-limiter | grep ISPN000094
-# ISPN000094: Received new cluster view for channel rate-limiter-sa-t: [...|1] (2) [...]
+oc -n sa-t create secret generic rate-limiter-datagrid \
+  --from-literal=RATELIMITER_INFINISPAN_USERNAME=developer \
+  --from-literal=RATELIMITER_INFINISPAN_PASSWORD='<password>'
 ```
 
-A 403 from the API server shows up in the same log as a KUBE_PING warning; a cluster of one with no
-warning usually means the label selector matched nothing.
+If the chart cannot reference a Secret via `envFrom`, the same two variables can come from wherever
+the chart does take environment from.
 
-## No volume, so no store
+Things that break the connection, and how they look: every check answers with the
+`RATELIMITER_WHEN_STORE_UNAVAILABLE` fallback and an `X-RateLimit-Degraded: store-unavailable`
+header, and the log carries `Bucket store unavailable, allowing|denying all calls` at most every 30s,
+with the cause.
 
-The chart's pods get no PersistentVolume, and the `SoftIndexFileStore` must never be shared between
-nodes, so persistence is off here. Buckets live in memory, distributed with two owners:
+- `SSLHandshakeException` / certificate errors: the CR uses a custom certificate rather than the
+  service CA, or the chart disables the ServiceAccount token mount (`automountServiceAccountToken:
+  false`), which also removes `service-ca.crt`. Point `RATELIMITER_INFINISPAN_TLS_TRUST_STORE` at a
+  mounted CA bundle, or set `RATELIMITER_INFINISPAN_TLS_ENABLED=false` if the CR has
+  `endpointEncryption.type: None`.
+- `SecurityException` / authentication failed: wrong credentials, or a user without permission to
+  create the cache - have the Data Grid owner create `rate-limit-buckets` (see the root README for
+  the definition), and the app will use it as it is.
+- connection timeouts after the first request: the client connects to Data Grid pod IPs directly
+  (`HASH_DISTRIBUTION_AWARE`); if a NetworkPolicy allows only the Service, set
+  `RATELIMITER_INFINISPAN_INTELLIGENCE=BASIC`.
 
-- **rolling update** - buckets survive. `maxUnavailable: 0` keeps the running replicas up while the
-  new ones join, and the leaving pod's segments are handed to the pods that stay.
-- **every pod stopped at once** - quotas reset. For the 100k/day limits that is a day's allowance
-  handed back.
-- **scaling** - fine, the data rebalances; this is the case a per-node file store would *not*
-  survive.
+`/actuator/health` (port 8081) lists `bucketStore` as `UP` or `DOWN`. It is **not** part of
+`/actuator/health/readiness`: with Data Grid down every pod is equally degraded, and pulling them all
+out of the Service would turn fail-open into an outage.
 
-If quotas must hold across a full outage, the answer is a shared store (JDBC) rather than a volume -
-see the root README.
+What survives what:
+
+- **rolling update of rate-limiter** - everything; the pods hold no state.
+- **one Data Grid pod restarting** - buckets survive, each is held by two owners.
+- **the whole Data Grid cluster restarting** - quotas reset, unless the cache is given a persistent
+  store on the Data Grid side. For the 100k/day limits that is a day's allowance handed back.
 
 ## Which pod answered
 
@@ -116,9 +102,14 @@ both pods - which is the whole point of the shared bucket.
 ## Test cluster
 
 The same manifests run on the local kubeadm cluster (`~/.kube/local-k8s-cluster.yaml`, nodes
-`control-1`, `worker-1`, `worker-2`), which is the cheapest way to check discovery and the
-label/port wiring before handing anything to the platform team. There `namespace.yaml` and
-`service.yaml` do apply, and `service.yaml` adds a NodePort that has no counterpart on `sa-t`.
+`control-1`, `worker-1`, `worker-2`), which is the cheapest way to check the label/port wiring
+before handing anything to the platform team. There `namespace.yaml` and `service.yaml` do apply,
+and `service.yaml` adds a NodePort that has no counterpart on `sa-t`.
+
+That cluster has no Data Grid operator and no service CA, so it needs an Infinispan server of its
+own (e.g. `quay.io/infinispan/server:15.2` behind a Service named `datagrid`, with `USER`/`PASS`
+matching the Secret) and TLS switched off with `RATELIMITER_INFINISPAN_TLS_ENABLED=false`. Without
+one the pods still start and answer - with the fallback.
 
 There is no `~/.kube/config` on this machine, so **every** `kubectl` here needs `KUBECONFIG` set.
 Without it kubectl falls back to `http://localhost:8080`, where open-webui answers with an HTML page,

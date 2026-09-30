@@ -27,9 +27,16 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
      */
     static final String SERVED_BY_HEADER = "X-Served-By";
 
+    /**
+     * Present when the bucket store could not be consulted and the answer is the configured fallback
+     * ({@code ratelimiter.when-store-unavailable}) rather than a count. A header for the same reason
+     * as {@link #SERVED_BY_HEADER}.
+     */
+    static final String DEGRADED_HEADER = "X-RateLimit-Degraded";
+
     private final RateLimiter rateLimiter;
 
-    /** Pod name on Kubernetes (the StatefulSet passes it in), hostname anywhere else. */
+    /** Pod name on Kubernetes (the Deployment passes it in), hostname anywhere else. */
     private final String instanceId;
 
     public RateLimitApiDelegateImpl(
@@ -50,15 +57,15 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
                 .remaining(decision.remaining())
                 .retryAfterMillis(decision.retryAfterMillis());
 
-        if (decision.allowed()) {
-            return ResponseEntity.ok()
-                    .header(SERVED_BY_HEADER, instanceId)
-                    .body(body);
+        ResponseEntity.BodyBuilder response = decision.allowed()
+                ? ResponseEntity.ok()
+                : ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Retry-After", String.valueOf(Math.max(1, decision.retryAfterMillis() / 1000)));
+        response.header(SERVED_BY_HEADER, instanceId);
+        if (decision.degraded()) {
+            response.header(DEGRADED_HEADER, "store-unavailable");
         }
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header(SERVED_BY_HEADER, instanceId)
-                .header("Retry-After", String.valueOf(Math.max(1, decision.retryAfterMillis() / 1000)))
-                .body(body);
+        return response.body(body);
     }
 
     private static String localHostName() {

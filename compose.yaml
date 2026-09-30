@@ -1,4 +1,15 @@
 services:
+  # The bucket store. 15.2 is the server generation Data Grid 8.x is built on; the app's 16.x client
+  # negotiates down to it. Also what `mvn spring-boot:run` talks to on localhost:11222.
+  infinispan:
+    image: quay.io/infinispan/server:15.2
+    container_name: rate-limiter-infinispan
+    ports:
+      - "11222:11222"
+    environment:
+      USER: ratelimiter
+      PASS: ratelimiter
+
   rate-limiter:
     build: .
     image: rate-limiter:0.1.0-SNAPSHOT
@@ -6,12 +17,11 @@ services:
     ports:
       - "8051:8051"
     environment:
-      # Keep this node away from anything else clustering on the host network.
-      RATELIMITER_CLUSTER_NAME: rate-limiter-local
-    volumes:
-      # Per-node bucket store. A second node needs its own volume, never this one.
-      - rate-limiter-data:/data
+      RATELIMITER_INFINISPAN_SERVERS: infinispan:11222
+      RATELIMITER_INFINISPAN_USERNAME: ratelimiter
+      RATELIMITER_INFINISPAN_PASSWORD: ratelimiter
+      # The server advertises its container address; BASIC keeps the client on the one above.
+      RATELIMITER_INFINISPAN_INTELLIGENCE: BASIC
+    depends_on:
+      - infinispan
     restart: unless-stopped
-
-volumes:
-  rate-limiter-data:

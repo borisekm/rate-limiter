@@ -1,11 +1,14 @@
 package com.example.ratelimiter.api;
 
+import com.example.ratelimiter.HotRodTestServer;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
@@ -13,6 +16,7 @@ import java.time.Duration;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -24,14 +28,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * resource's period - while {@code RateLimiterTest} pins the arithmetic down with a fake clock.
  */
 @SpringBootTest(properties = {
-        "ratelimiter.cluster-name=test-rate-limit-api",
-        // Persistence stays on, so the wiring the app really runs with is exercised - but into a
-        // temporary directory, and every test uses a fresh random identifier so leftovers never match.
-        "ratelimiter.persistence.location=${java.io.tmpdir}/rate-limiter-test/api",
-        // On Kubernetes the StatefulSet passes the pod name here; anywhere else it is the hostname.
-        "ratelimiter.instance-id=test-node-1"})
+        // On Kubernetes the Deployment passes the pod name here; anywhere else it is the hostname.
+        "ratelimiter.instance-id=test-node-1",
+        // The container advertises its internal address, which the host may not reach.
+        "ratelimiter.infinispan.intelligence=BASIC"})
 @AutoConfigureMockMvc
 class RateLimitApiTest {
+
+    /** The shared test server; every test uses a fresh random identifier, so buckets never collide. */
+    @DynamicPropertySource
+    static void infinispan(DynamicPropertyRegistry registry) {
+        registry.add("ratelimiter.infinispan.servers", HotRodTestServer::address);
+        registry.add("ratelimiter.infinispan.username", () -> HotRodTestServer.USERNAME);
+        registry.add("ratelimiter.infinispan.password", () -> HotRodTestServer.PASSWORD);
+    }
 
     private static final long MINUTE_MILLIS = Duration.ofMinutes(1).toMillis();
     private static final long DAY_MILLIS = Duration.ofDays(1).toMillis();
@@ -93,7 +103,15 @@ class RateLimitApiTest {
         // Which node answered - the response body is the API contract's, so this rides in a header.
         check("subjectSearch", UUID.randomUUID().toString())
                 .andExpect(status().isOk())
-                .andExpect(header().string("X-Served-By", "test-node-1"));
+                .andExpect(header().string("X-Served-By", "test-node-1"))
+                .andExpect(header().doesNotExist("X-RateLimit-Degraded"));
+    }
+
+    @Test
+    void bucketStoreHealthIsUp() throws Exception {
+        mockMvc.perform(get("/actuator/health/bucketStore"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
     }
 
     @Test

@@ -1,13 +1,16 @@
 package com.example.ratelimiter.core;
 
+import com.example.ratelimiter.HotRodTestServer;
 import com.example.ratelimiter.MutableClock;
 import com.example.ratelimiter.api.model.CheckRateRequest;
+import com.example.ratelimiter.config.HotRodConfig;
 import com.example.ratelimiter.config.RateLimiterProperties;
 import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
-import org.infinispan.Cache;
-import org.infinispan.configuration.cache.ConfigurationBuilder;
-import org.infinispan.manager.DefaultCacheManager;
-import org.junit.jupiter.api.AfterEach;
+import com.example.ratelimiter.config.RateLimiterProperties.WhenStoreUnavailable;
+import org.infinispan.client.hotrod.RemoteCache;
+import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,32 +24,44 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * The limiter over a real Infinispan server ({@link HotRodTestServer}), so the compare-and-swap path
+ * runs over the wire protocol it runs over in production. The cache is cleared between tests.
+ */
 class RateLimiterTest {
 
     private static final Resource SUBJECT = Resource.SUBJECT_SEARCH;  // 15 burst, +6 per minute
     private static final Resource DAILY = Resource.MAX_CALLS_IP;      // 100k per day
 
-    private DefaultCacheManager cacheManager;
+    private static final Map<Resource, ResourcePolicy> POLICIES = Map.of(
+            Resource.SUBJECT_SEARCH, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
+            Resource.NEW_CASES, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
+            Resource.MAX_CALLS_IP, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)),
+            Resource.MAX_CALLS_SESS, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)));
+
+    private static RemoteCacheManager client;
+    private static RemoteCache<String, byte[]> cache;
+
+    private final RateLimiterProperties props = new RateLimiterProperties(POLICIES);
     private MutableClock clock;
     private RateLimiter limiter;
 
-    @BeforeEach
-    void setUp() {
-        cacheManager = new DefaultCacheManager();
-        cacheManager.defineConfiguration("buckets", new ConfigurationBuilder().build());
-        Cache<String, byte[]> cache = cacheManager.getCache("buckets");
-        clock = new MutableClock();
-        RateLimiterProperties props = new RateLimiterProperties(Map.of(
-                Resource.SUBJECT_SEARCH, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
-                Resource.NEW_CASES, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
-                Resource.MAX_CALLS_IP, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)),
-                Resource.MAX_CALLS_SESS, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1))));
-        limiter = new RateLimiter(cache, props, clock);
+    @BeforeAll
+    static void connect() {
+        client = HotRodTestServer.newClient();
+        cache = client.getCache(HotRodConfig.BUCKETS_CACHE);   // creates it, as the app would
     }
 
-    @AfterEach
-    void tearDown() {
-        cacheManager.stop();
+    @AfterAll
+    static void disconnect() {
+        client.stop();
+    }
+
+    @BeforeEach
+    void setUp() {
+        cache.clear();
+        clock = new MutableClock();
+        limiter = new RateLimiter(client, props, clock);
     }
 
     @Test
@@ -71,6 +86,74 @@ class RateLimiterTest {
         pool.shutdownNow();
 
         assertThat(allowed).isEqualTo(15);
+    }
+
+    @Test
+    void twoInstancesShareOneBucket() throws Exception {
+        // Two clients with their own connections, as two pods would have: the quota is the server's,
+        // and concurrent checks through both still admit exactly the capacity.
+        try (RemoteCacheManager otherClient = HotRodTestServer.newClient()) {
+            RateLimiter other = new RateLimiter(otherClient, props, clock);
+            ExecutorService pool = Executors.newFixedThreadPool(16);
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Boolean>> results = new ArrayList<>();
+            for (int i = 0; i < 100; i++) {
+                RateLimiter instance = i % 2 == 0 ? limiter : other;
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return instance.check(SUBJECT, "shared").allowed();
+                }));
+            }
+            start.countDown();
+
+            long allowed = 0;
+            for (Future<Boolean> f : results) {
+                if (f.get(10, TimeUnit.SECONDS)) allowed++;
+            }
+            pool.shutdownNow();
+
+            assertThat(allowed).isEqualTo(15);
+            assertThat(other.check(SUBJECT, "shared").remaining()).isZero();
+        }
+    }
+
+    @Test
+    void bucketsAreWrittenWithTheDerivedLifespan() {
+        limiter.check(SUBJECT, "ip");
+
+        assertThat(cache.getWithMetadata(RateLimiter.bucketName(SUBJECT, "ip")).getLifespan())
+                .isEqualTo(props.bucketLifespan().toSeconds());
+    }
+
+    @Test
+    void unreachableStoreFailsClosedWhenConfiguredTo() {
+        try (RemoteCacheManager dead = HotRodTestServer.client(HotRodTestServer.deadAddress())) {
+            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.DENY), clock);
+
+            Decision decision = cut.check(SUBJECT, "ip");
+            assertThat(decision.degraded()).isTrue();
+            assertThat(decision.allowed()).isFalse();
+            assertThat(decision.limit()).isEqualTo(15);
+            assertThat(decision.retryAfterMillis()).isEqualTo(RateLimiter.UNAVAILABLE_RETRY_AFTER_MILLIS);
+        }
+    }
+
+    @Test
+    void unreachableStoreFailsOpenWhenConfiguredTo() {
+        try (RemoteCacheManager dead = HotRodTestServer.client(HotRodTestServer.deadAddress())) {
+            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.ALLOW), clock);
+
+            for (int i = 0; i < 20; i++) {                        // past capacity: nothing is counted
+                Decision decision = cut.check(SUBJECT, "ip");
+                assertThat(decision.degraded()).isTrue();
+                assertThat(decision.allowed()).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void reachableStoreAnswersAreNotDegraded() {
+        assertThat(limiter.check(SUBJECT, "ip").degraded()).isFalse();
     }
 
     @Test

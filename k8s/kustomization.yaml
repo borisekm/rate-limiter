@@ -4,7 +4,6 @@ namespace: sa-t
 resources:
   # On sa-t, drop namespace.yaml (it exists) and service.yaml (the central chart owns it).
   - namespace.yaml
-  - rbac.yaml
   - configmap.yaml
   - service.yaml
   - deployment.yaml

@@ -1,10 +1,13 @@
 # rate-limiter
 
-Token-bucket rate limiter service on Spring Boot 4 + embedded Infinispan 16.
+Token-bucket rate limiter service on Spring Boot 4, with the buckets held on a remote Infinispan /
+Red Hat Data Grid server (Hot Rod client 16).
 
 ```bash
-mvn clean verify          # generates the API, compiles, runs tests; clean also wipes ./data (see Persistence)
-mvn spring-boot:run
+mvn clean verify          # generates the API, compiles, runs tests (the tests start an Infinispan container)
+docker compose up -d infinispan
+RATELIMITER_INFINISPAN_USERNAME=ratelimiter RATELIMITER_INFINISPAN_PASSWORD=ratelimiter \
+  RATELIMITER_INFINISPAN_INTELLIGENCE=BASIC mvn spring-boot:run
 
 curl -s -X POST localhost:8051/v1/rate/check \
   -H 'Content-Type: application/json' \
@@ -44,9 +47,9 @@ Refill is **stepwise, not a continuous drip**: at each period boundary the bucke
 `refill-tokens`, capped at `capacity`. Mid-period nothing accrues. In Bucket4j terms that is
 `refillIntervally`; `refillGreedy` would be the smooth drip.
 
-The algorithm itself is [Bucket4j](https://bucket4j.com), running distributed over the Infinispan
-cache (`bucket4j_jdk17-core` + `bucket4j_jdk17-infinispan`). Each policy becomes a `BucketConfiguration`
-with one `Bandwidth`, built once at startup in `core/RateLimiter`.
+The algorithm itself is [Bucket4j](https://bucket4j.com) (`bucket4j_jdk17-core`), with its state in
+the remote cache - see [Atomicity](#atomicity). Each policy becomes a `BucketConfiguration` with one
+`Bandwidth`, built once at startup in `core/RateLimiter`.
 
 `retryAfterMillis` is always the wait until the next refill that helps, on allowed and refused calls
 alike: when refused, until enough tokens are back; when allowed, until the next refill lands. It is
@@ -57,69 +60,82 @@ bind, not the first request.
 Buckets are dropped from the cache after the longest time-to-full across all policies (24h with the
 config above). Anything older has refilled to capacity anyway, so it is indistinguishable from an
 absent bucket - which is why this is derived rather than configured; a shorter one would silently
-reset the daily quotas. It is applied as `lifespan` rather than `maxIdle`, because Infinispan refuses
-max-idle alongside a cache store without passivation (ISPN000651) and every check writes the entry
-anyway, which refreshes the lifespan just as an access would refresh max-idle.
+reset the daily quotas. It is sent as the `lifespan` of every write, so it holds whatever the
+server's cache definition says, and since every check writes the entry it is refreshed on each use.
 
-## Persistence
+## Bucket store
 
-Buckets are written to a `SoftIndexFileStore` (part of `infinispan-core` - no extra dependency), so
-state survives a restart of every node. Without it a deploy hands back a full bucket to everyone,
-which for the 100k/day quotas means a whole day's allowance.
+The buckets live in the cache `rate-limit-buckets` on an Infinispan server, reached over Hot Rod -
+on OpenShift the namespace's Red Hat Data Grid cluster. The service itself is stateless: replicas
+never talk to each other and share their limits only through that cache.
 
 ```yaml
 ratelimiter:
-  persistence:
-    enabled: true
-    location: ./data/rate-limiter    # per node - two nodes must never share a directory
+  infinispan:
+    servers: localhost:11222       # host:port[;host:port...]
+    username: ...                  # SCRAM; both unset = no authentication
+    password: ...
+    tls:
+      enabled: true
+      trust-store: /path/to/ca.crt # PEM; unset = the JVM's trust store
+    intelligence: HASH_DISTRIBUTION_AWARE   # BASIC when the server pods' own IPs are not reachable
+    connect-timeout: 2s
+    socket-timeout: 2s
 ```
 
-The store lives in a subdirectory named after the state format (`bucket4j-v2`). Persisted entries can
-only be read back by code that still has a marshaller for them, so a change of bucket representation
-would otherwise make every request touching an old key fail with
-`No marshaller registered for Protobuf type ...`. Bumping `STATE_FORMAT` in `InfinispanConfig` on such
-a change starts a clean store instead; the previous directory becomes inert and can be deleted. This
-is what happened moving from the hand-written buckets to Bucket4j (`bucket4j-v1`), and again moving to
-Infinispan 16, whose store a 15.x node wrote cannot be assumed readable (`bucket4j-v2`). The older
-directories are dead weight and safe to remove.
+The app creates the cache on first use if the server does not have it, with this definition
+(`HotRodConfig.BUCKETS_CACHE_DEFINITION`); an existing cache of that name is used as it is, so the
+server's owner can equally create it up front:
 
-Writes are **write-behind** (`async().enable()`), so a hard kill can lose the last few writes and
-leave a quota slightly over-permissive; in exchange a check never waits on the disk. `preload` is off:
-`cache.compute()` reads through to the store on a miss, so a bucket is restored the first time it is
-touched rather than loading every bucket into heap at boot.
+```json
+{"distributed-cache": {"mode": "SYNC", "owners": 2, "statistics": true,
+  "encoding": {"media-type": "application/x-protostream"}}}
+```
 
-What this survives:
+Keys are strings and values are Bucket4j's own `byte[]` state, both native to ProtoStream, so no
+schema has to be registered on the server and nothing of ours is deployed into it. The client (16.x)
+negotiates the Hot Rod protocol version, so it works with the older servers Data Grid 8.x ships.
 
-| | |
+Durability is the server's business now: two owners carry the buckets through the loss of one Data
+Grid pod, and only a restart of the whole Data Grid cluster resets quotas - unless the cache is
+given a persistent store there.
+
+Refill anchors are epoch milliseconds, not `System.nanoTime()`, so state written by one JVM still
+means the same thing to another replica, on another machine, or after a restart.
+
+## When the store is unavailable
+
+Every check needs the server. When it cannot be reached (or refuses the request), the check does
+not fail: it answers with the fallback in `ratelimiter.when-store-unavailable`, which every
+environment sets deliberately - the code has no default:
+
+| value | answer |
 |---|---|
-| One node restarting, cluster stays up | Fine - the other owner has the data anyway |
-| Every node restarting, same node count | Fine - each node reloads the segments it owns |
-| Restarting with a **different** node count | **Buckets can be lost.** The store is per node (`shared=false`) and holds only that node's segments; after a topology change a node may hold entries it no longer owns |
+| `allow` | fail open: 200, `allowed: true`, nothing counted |
+| `deny` | fail closed: 429, `allowed: false`, `retryAfterMillis: 1000` |
 
-That last row is what matters on OpenShift: a file store needs a StatefulSet with a PVC per pod, and a
-plain Deployment loses buckets whenever pods move or scale. If quotas must hold across scaling, use a
-**shared** store instead - add `org.infinispan:infinispan-cachestore-jdbc` (the imported BOM supplies
-the version), point every node at one database and set `.shared(true)`.
+Either way the response carries `X-RateLimit-Degraded: store-unavailable`, and the log gets a
+`Bucket store unavailable, allowing|denying all calls ...` warning with the cause - once when the outage
+starts and then at most every 30s with the number of degraded answers in between, so an outage under
+load does not flood the log. `Bucket store reachable again` marks the end. The Hot Rod client logs
+its own connection errors too.
 
-On OpenShift the store is therefore **off** (`ratelimiter.persistence.enabled: false`, set in the
-Kubernetes document of `application.yml`): the central Helm chart that owns the Deployment gives the
-pods no volume, and a store on the container filesystem would be a different, empty store after every
-restart anyway. Buckets then live in memory with two owners, so a *rolling* restart carries them over
-- the surviving pods hand their segments to the new ones - while a simultaneous stop of every pod
-resets the quotas. See [k8s/README.md](k8s/README.md).
-
-Refill anchors are epoch milliseconds, not `System.nanoTime()`, precisely so that persisted state
-still means something in a new JVM - and so that nodes on different machines agree, which they did not
-before.
+The app also starts without the server (the cache is looked up on first use), and
+`/actuator/health` lists `bucketStore` as `UP`/`DOWN`. That indicator is deliberately left out of
+the readiness group: with the store down every replica is equally degraded, and taking them all out
+of the Service would turn fail-open into an outage.
 
 ## Layout
 
 | | |
 |---|---|
 | `core/Resource` | the limited resources; domain counterpart of the spec's `resource` enum |
-| `core/RateLimiter` | bucket naming, the Bucket4j configuration per resource, and the decision |
-| `config/RateLimiterProperties` | per-resource policies, derived bucket lifespan |
-| `config/InfinispanConfig` | cluster, marshaller, file store, and the wall `Clock` bean |
+| `core/RateLimiter` | bucket naming, the Bucket4j configuration per resource, the decision, the outage fallback |
+| `core/HotRodProxyManager` | Bucket4j over a Hot Rod `RemoteCache` by versioned compare-and-swap |
+| `config/RateLimiterProperties` | per-resource policies, derived bucket lifespan, `when-store-unavailable` |
+| `config/InfinispanClientProperties` | how to reach the server (`ratelimiter.infinispan.*`) |
+| `config/HotRodConfig` | the `RemoteCacheManager`, the buckets cache definition, and the wall `Clock` bean |
+| `config/BucketStoreHealthIndicator` | `bucketStore` in `/actuator/health` |
 | `config/ResourceConverter` | binds `ratelimiter.resources` keys by wire value |
 | `config/ValidationConfig`, `config/EnumSizeValidator` | let `@Size` apply to an enum - see below |
 | `api/RateLimitApiDelegateImpl` | the only hand-written piece of the API layer |
@@ -133,95 +149,36 @@ every request into a 500 (`HV000030`). `ValidationConfig` registers `EnumSizeVal
 `@Size` on an enum measure the constant's wire value instead. Both classes can go once the spec drops
 the length bounds from the enum, where they mean nothing anyway.
 
-## Clustering
+## Atomicity
 
-Run a second instance (`--server.port=8052`) on the same host and the two nodes form an Infinispan
-cluster; buckets are distributed with 2 owners, so both instances enforce one shared limit per bucket.
+Bucket4j's own Infinispan module ships an entry processor to the key's owner, which only an
+*embedded* cache can run; Hot Rod cannot send code to the server. `core/HotRodProxyManager` uses
+Bucket4j's generic compare-and-swap instead:
 
-Nodes cluster with nodes of the same cluster name - `ratelimiter.cluster-name`, default
-`rate-limiter`. Set it per environment so unrelated instances on one subnet do not find each other;
-the two-node tests use it to keep away from anything running locally.
+1. `getWithMetadata(key)` - the bucket state and its version (or nothing, for a new bucket)
+2. Bucket4j applies the refill-and-consume locally
+3. `replaceWithVersion(key, state, version, lifespan)` - or `putIfAbsent` for a new bucket - which
+   the server applies only if nobody wrote the bucket in between
 
-The transport is **TCP**, not the UDP stack Infinispan defaults to - multicast is unavailable on
-OpenShift and most cloud networks, so this is the transport we deploy on. The bundled stacks differ
-only in how members are *discovered*:
+A lost race returns `false`, and Bucket4j re-reads and retries. Every check therefore costs two
+round trips, more under contention on the same bucket, and no lock is held anywhere - some writer
+always wins, so a hot bucket cannot deadlock. `admitsExactlyCapacityUnderConcurrency` and
+`twoInstancesShareOneBucket` hold this to exactly the capacity. Never write a bucket unversioned:
+that is a lost update and quietly over-admits.
 
-| `ratelimiter.jgroups-config` | discovery | where |
-|---|---|---|
-| `org/infinispan/configuration/default-jgroups-tcp.xml` (default) | MPING (multicast) | local, dev |
-| `jgroups-kubeping.xml` | KUBE_PING (Kubernetes API) | OpenShift |
-| `org/infinispan/configuration/default-jgroups-kubernetes.xml` | DNS_PING (headless service) | Kubernetes, given a headless service |
+## Tests
 
-So the default still discovers over multicast even though the data path is TCP. On Kubernetes the app
-switches itself to `jgroups-kubeping.xml`, in the `application.yml` document guarded by
-`spring.config.activate.on-cloud-platform: kubernetes` - no environment variable needed, which
-matters when the Deployment comes from a chart we do not own.
-
-**Why KUBE_PING and not DNS_PING.** DNS_PING needs a *headless* Service, whose DNS record answers
-with one A record per pod. The Service we are given on OpenShift is a plain ClusterIP with a virtual
-IP, whose DNS answers with that one address - kube-proxy then load-balances the discovery request to
-a single arbitrary pod, so members never see each other and every pod forms a cluster of one.
-KUBE_PING skips DNS and asks the API server for the pods matching a label selector, then pings their
-pod IPs directly. It costs one dependency (`org.jgroups.kubernetes:jgroups-kubernetes`) and a Role
-letting the pod's ServiceAccount `list` pods in its own namespace; without that Role the API call is
-refused with 403 and, again, nobody finds anybody. Where a headless service *is* available, DNS_PING
-is the simpler choice:
-
-```
--Dratelimiter.jgroups-config=org/infinispan/configuration/default-jgroups-kubernetes.xml
--Djgroups.dns.query=rate-limiter-headless.my-namespace.svc.cluster.local
-```
-
-`KubePingStackTest` parses `jgroups-kubeping.xml` and asserts KUBE_PING is really in it - the stack
-is selected only inside a pod, and a mistake there shows up as pods that start happily and each form
-a cluster of one.
-
-JGroups binds port 7800 and takes the next free one when it is busy, so several nodes can share a
-host (`ISPN000079` in the log names the port a node actually took).
-
-The two-node tests use `src/test/resources/jgroups-test-tcpping.xml` instead - the same TCP stack with
-static loopback discovery - because MPING binds whichever site-local address comes first, and on a
-machine with a VPN or a VMware/Hyper-V adapter that is a virtual NIC multicast never crosses. There
-the nodes would each form a cluster of one and the shared-limit tests would fail for reasons that have
-nothing to do with the code.
-
-A bucket lives on whichever nodes its key hashes to, which is usually not the node handling the
-request. Bucket4j's `InfinispanProxyManager` therefore ships an **entry processor** to the key's
-primary owner and runs the refill-and-consume there - atomic across the cluster without explicit
-locking. Never read a bucket, decide, and write it back.
-
-## Serialization (ProtoStream)
-
-Two things cross a node boundary and so have to be turned into bytes: the bucket state being stored
-and replicated, and Bucket4j's entry processor being shipped to the owner.
-
-`InfinispanConfig` sets ProtoStream as the user marshaller explicitly. This matters: the Spring Boot
-starter otherwise leaves it as `JavaSerializationMarshaller`, and the first time a bucket key is owned
-by another node the shipped entry processor is refused by the deserialization allow list
-(`ISPN000936`) - a failure a single node never sees. Check the startup log for
-`ISPN000556: Starting user marshaller 'org.infinispan.commons.marshall.ProtoStreamMarshaller'`.
-
-Bucket4j's schema - `Bucket4jProtobufContextInitializer`, covering its processor and result types - is
-supplied as a configured context initializer (`serialization().addContextInitializer(...)`), which
-registers it in both the user and the global ProtoStream context. The global one is what matters:
-since Infinispan 16, a ProtoStream user marshaller makes the global marshaller bypass the user
-marshaller entirely (`GlobalMarshaller.skipUserMarshaller`) and write user objects with the global
-context. Registering the schema on the marshaller instance instead - the Infinispan 15 arrangement,
-where an explicitly supplied marshaller ignored `addContextInitializer` - leaves the global context
-without it and every cross-node bucket operation fails with
-`No marshaller registered for object of Java type ... InfinispanProcessor`.
-
-Bucket state itself is stored as `byte[]`: Bucket4j serialises its own state, so the cache never sees
-an application type. That is why this project no longer defines any `@Proto` records or a ProtoStream
-schema of its own, and why `protostream-processor` is no longer a dependency.
-
-None of this would be needed for a single node on a `LOCAL` cache - but that gives up the distribution
-that makes this a service rather than a library.
+The tests run against a real Infinispan server in a container (`HotRodTestServer`, Testcontainers,
+`quay.io/infinispan/server:15.2` - the generation Data Grid 8.x is built on; override with
+`-Dinfinispan.image=...`), started once per JVM, with SCRAM credentials, the app creating its own
+cache, and the real client configuration from `HotRodConfig`. So Docker has to be running for
+`mvn test`. An in-JVM Hot Rod server is not an option: Infinispan 16's server modules are built for
+Java 25, this project for 21.
 
 ## Containers and Kubernetes
 
 `Dockerfile` builds the service (the OpenAPI generation runs inside the build stage) onto a JRE
-image that keeps its bucket store in the `/data` volume; `compose.yaml` runs a single node locally.
+image with no state of its own; `compose.yaml` runs it next to an Infinispan server.
 
 ```bash
 docker compose up -d
@@ -233,9 +190,10 @@ Every response carries an `X-Served-By` header naming the node that answered (th
 Kubernetes, the hostname otherwise; override with `ratelimiter.instance-id`). It is a header and not
 a response field because the response schema belongs to the API contract.
 
-`k8s/` deploys two clustered nodes as a Deployment, shaped for an OpenShift namespace whose Service
-and Deployment come from a central Helm chart: ports 8080 (traffic) and 8081 (actuator), KUBE_PING
-discovery plus the Role it needs, and no volume. See [k8s/README.md](k8s/README.md).
+`k8s/` deploys two replicas as a Deployment, shaped for an OpenShift namespace whose Service and
+Deployment come from a central Helm chart: ports 8080 (traffic) and 8081 (actuator), no volume, and
+Data Grid in the same namespace as the store. See [k8s/README.md](k8s/README.md).
 
-Locally the app stays on 8051 with its store intact; the Kubernetes settings apply only when Spring
-detects the platform, which it does from the `KUBERNETES_SERVICE_HOST` every pod gets.
+Locally the app stays on 8051 without TLS; the Kubernetes settings (ports, TLS to Data Grid with the
+service CA) apply only when Spring detects the platform, which it does from the
+`KUBERNETES_SERVICE_HOST` every pod gets.

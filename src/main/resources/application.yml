@@ -1,9 +1,6 @@
 spring:
   application:
     name: rate-limiter
-  cache:
-    type: infinispan    # required for the starter to create the EmbeddedCacheManager bean;
-                         # we still talk to the cache directly rather than via @Cacheable
 
 server:
   port: 8051
@@ -14,18 +11,19 @@ server:
 # A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
 # Buckets are dropped once they would have refilled to capacity anyway (derived, not configured).
 ratelimiter:
-  # cluster-name: rate-limiter   # nodes only cluster with nodes of the same name
-  # JGroups stack. TCP in every environment; the files differ only in how members are discovered.
-  # Local/dev uses MPING (multicast discovery). On OpenShift switch to DNS_PING:
-  #   jgroups-config: org/infinispan/configuration/default-jgroups-kubernetes.xml
-  # and set -Djgroups.dns.query=<headless-service>.<namespace>.svc.cluster.local
-  # jgroups-config: org/infinispan/configuration/default-jgroups-tcp.xml
-  persistence:
-    enabled: true
-    # Buckets are written here so they survive a restart of every node. Each node needs its own
-    # directory - two nodes on one host must not share one. On OpenShift this means a StatefulSet
-    # with a PVC per pod; see README.
-    location: ./data/rate-limiter
+  # The Infinispan / Data Grid server holding the buckets. Locally: the one in compose.yaml.
+  infinispan:
+    servers: localhost:11222
+    # username:            # both unset = no authentication
+    # password:
+    # tls:
+    #   enabled: true
+    #   trust-store: /path/to/ca.crt     # PEM; unset = the JVM's default trust store
+  # The answer while that server cannot be reached: allow (fail open) or deny (fail closed). The code
+  # has no default; this is the local one, and each deployed environment sets its own in
+  # k8s/configmap.yaml. Either way the answer carries an X-RateLimit-Degraded header and a warning is
+  # logged.
+  when-store-unavailable: deny
   resources:
     subjectSearch:            # calls into the subject service
       capacity: 15
@@ -44,15 +42,16 @@ ratelimiter:
       refill-tokens: 100000
       refill-period: 12h
 
-infinispan:
-  embedded:
-    enabled: true
-
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      # Lists bucketStore (is the Infinispan server reachable?) next to the rest. It is not part of
+      # the readiness group: see BucketStoreHealthIndicator.
+      show-components: always
 
 ---
 # --- OpenShift / Kubernetes -------------------------------------------------------------------
@@ -78,12 +77,10 @@ management:
         enabled: true
 
 ratelimiter:
-  # KUBE_PING, because the Service we are given is a ClusterIP with a virtual IP rather than a
-  # headless one; see the header of jgroups-kubeping.xml.
-  jgroups-config: jgroups-kubeping.xml
-  persistence:
-    # The chart gives pods no volume, and the SoftIndexFileStore must never be shared between
-    # nodes - a store on the container filesystem would be a different, empty store after every
-    # restart anyway. Buckets therefore live in memory, replicated (numOwners=2) across the
-    # cluster: a rolling restart keeps them, a full stop of every pod resets quotas.
-    enabled: false
+  infinispan:
+    # The Data Grid operator's defaults on OpenShift: TLS with a certificate signed by the service CA,
+    # which OpenShift mounts into every pod, and SCRAM credentials (RATELIMITER_INFINISPAN_USERNAME /
+    # _PASSWORD). The server address is per environment - see k8s/configmap.yaml.
+    tls:
+      enabled: true
+      trust-store: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

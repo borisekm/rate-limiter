@@ -5,6 +5,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
@@ -16,10 +17,26 @@ import java.util.Map;
 /**
  * One policy per limited {@link Resource}. Buckets are named {@code <resource>@<identifier>}, so a
  * resource's policy applies to every identifier independently.
+ *
+ * @param whenStoreUnavailable the answer given while the bucket store cannot be reached - there is no
+ *                             default, every environment has to choose
  */
 @Validated
 @ConfigurationProperties(prefix = "ratelimiter")
-public record RateLimiterProperties(Map<Resource, @Valid ResourcePolicy> resources) {
+public record RateLimiterProperties(
+        Map<Resource, @Valid ResourcePolicy> resources,
+        @NotNull WhenStoreUnavailable whenStoreUnavailable) {
+
+    /**
+     * What a check answers when the Infinispan server cannot be reached or refuses the request. Either
+     * way the answer is flagged as degraded and a warning is logged; this only decides its direction.
+     */
+    public enum WhenStoreUnavailable {
+        /** Fail open: let every call through, unlimited, until the store is back. */
+        ALLOW,
+        /** Fail closed: refuse every call until the store is back. */
+        DENY
+    }
 
     /**
      * @param capacity     max tokens the bucket holds (max burst); a fresh bucket starts full
@@ -38,7 +55,13 @@ public record RateLimiterProperties(Map<Resource, @Valid ResourcePolicy> resourc
         }
     }
 
+    /** Fail-closed, for tests that only care about the policies. */
+    public RateLimiterProperties(Map<Resource, ResourcePolicy> resources) {
+        this(resources, WhenStoreUnavailable.DENY);
+    }
+
     /** Every resource needs a policy; an omission fails the startup bind rather than a request. */
+    @ConstructorBinding
     public RateLimiterProperties {
         Map<Resource, ResourcePolicy> configured =
                 resources == null ? Map.of() : new EnumMap<>(resources);
@@ -59,9 +82,9 @@ public record RateLimiterProperties(Map<Resource, @Valid ResourcePolicy> resourc
      * How long a bucket must be kept. Once an empty bucket would have refilled to capacity it is
      * indistinguishable from an absent one, so anything older can be dropped.
      *
-     * <p>Applied as lifespan rather than max-idle: Infinispan refuses max-idle alongside a store
-     * without passivation (ISPN000651), and every check writes the entry anyway, so lifespan is
-     * refreshed on each use and amounts to the same thing here.
+     * <p>Applied as the lifespan of every write rather than as max-idle: every check writes the entry,
+     * so lifespan is refreshed on each use and amounts to the same thing - without depending on how
+     * the server's cache happens to be configured.
      */
     public Duration bucketLifespan() {
         return resources.values().stream()
