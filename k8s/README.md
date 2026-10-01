@@ -37,8 +37,8 @@ replicas never talk to each other, so there is no clustering, discovery, RBAC or
 
 | what the app needs | where it comes from |
 |---|---|
-| the server address | `RATELIMITER_INFINISPAN_SERVERS` in `configmap.yaml`: the operator's Service, named after the `Infinispan` CR (`oc get infinispan`), port 11222 |
-| credentials | `RATELIMITER_INFINISPAN_USERNAME` / `_PASSWORD` from the Secret `rate-limiter-datagrid` |
+| the server address | `INFINISPAN_REMOTE_SERVER_LIST` in `configmap.yaml`: the operator's Service, named after the `Infinispan` CR (`oc get infinispan`), port 11222; `INFINISPAN_REMOTE_SNI_HOST_NAME` next to it is the same Service name, which the certificate is checked against |
+| credentials | `INFINISPAN_USERNAME` / `_PASSWORD` from the Secret `rate-limiter-datagrid` |
 | trust for the TLS certificate | the operator's default certificate is signed by the OpenShift service CA, which OpenShift mounts into every pod at `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`; `application.yml` points the client there |
 | the cache | the app creates `rate-limit-buckets` on first use if it does not exist (distributed, 2 owners), so the user needs permission to create caches |
 
@@ -47,8 +47,8 @@ generated `developer` user can; its password is in `<cr-name>-generated-secret`)
 
 ```bash
 oc -n sa-t create secret generic rate-limiter-datagrid \
-  --from-literal=RATELIMITER_INFINISPAN_USERNAME=developer \
-  --from-literal=RATELIMITER_INFINISPAN_PASSWORD='<password>'
+  --from-literal=INFINISPAN_USERNAME=developer \
+  --from-literal=INFINISPAN_PASSWORD='<password>'
 ```
 
 If the chart cannot reference a Secret via `envFrom`, the same two variables can come from wherever
@@ -61,15 +61,15 @@ with the cause.
 
 - `SSLHandshakeException` / certificate errors: the CR uses a custom certificate rather than the
   service CA, or the chart disables the ServiceAccount token mount (`automountServiceAccountToken:
-  false`), which also removes `service-ca.crt`. Point `RATELIMITER_INFINISPAN_TLS_TRUST_STORE` at a
-  mounted CA bundle, or set `RATELIMITER_INFINISPAN_TLS_ENABLED=false` if the CR has
+  false`), which also removes `service-ca.crt`. Point `INFINISPAN_REMOTE_TRUST_STORE_FILE_NAME` at a
+  mounted CA bundle, or set `INFINISPAN_REMOTE_USE_SSL=false` if the CR has
   `endpointEncryption.type: None`.
 - `SecurityException` / authentication failed: wrong credentials, or a user without permission to
   create the cache - have the Data Grid owner create `rate-limit-buckets` (see the root README for
   the definition), and the app will use it as it is.
 - connection timeouts after the first request: the client connects to Data Grid pod IPs directly
   (`HASH_DISTRIBUTION_AWARE`); if a NetworkPolicy allows only the Service, set
-  `RATELIMITER_INFINISPAN_INTELLIGENCE=BASIC`.
+  `INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC`.
 
 `/actuator/health` (port 8081) lists `bucketStore` as `UP` or `DOWN`. It is **not** part of
 `/actuator/health/readiness`: with Data Grid down every pod is equally degraded, and pulling them all
@@ -108,7 +108,7 @@ and `service.yaml` adds a NodePort that has no counterpart on `sa-t`.
 
 That cluster has no Data Grid operator and no service CA, so it needs an Infinispan server of its
 own (e.g. `quay.io/infinispan/server:15.2` behind a Service named `datagrid`, with `USER`/`PASS`
-matching the Secret) and TLS switched off with `RATELIMITER_INFINISPAN_TLS_ENABLED=false`. Without
+matching the Secret) and TLS switched off with `INFINISPAN_REMOTE_USE_SSL=false`. Without
 one the pods still start and answer - with the fallback.
 
 There is no `~/.kube/config` on this machine, so **every** `kubectl` here needs `KUBECONFIG` set.

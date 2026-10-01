@@ -2,7 +2,7 @@
 # Data Grid with the service CA - the application settles for itself in application.yml, under
 # `spring.config.activate.on-cloud-platform: kubernetes`, precisely because the Deployment comes
 # from a chart we do not own. Everything here is an override on top of that, and Spring binds
-# RATELIMITER_X_Y -> ratelimiter.x.y.
+# RATELIMITER_X_Y -> ratelimiter.x.y and INFINISPAN_REMOTE_X_Y -> infinispan.remote.x-y.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,16 +12,17 @@ metadata:
     app.kubernetes.io/instance: rate-limiter
 data:
   # The Data Grid cluster's Service in this namespace: the operator names it after the Infinispan
-  # CR (`oc get infinispan`), port 11222. The name is also what the TLS certificate is checked
-  # against, so use the Service name, not an IP.
-  RATELIMITER_INFINISPAN_SERVERS: "datagrid:11222"
+  # CR (`oc get infinispan`), port 11222.
+  INFINISPAN_REMOTE_SERVER_LIST: "datagrid:11222"
+  # What the TLS certificate is checked against: the same Service's name, as the service CA issued it.
+  INFINISPAN_REMOTE_SNI_HOST_NAME: "datagrid"
 
   # The answer while Data Grid cannot be reached: "allow" (fail open) or "deny" (fail closed).
   # Chosen per environment on purpose. Degraded answers carry an X-RateLimit-Degraded header and
   # the app logs a warning at most every 30s while it lasts.
   RATELIMITER_WHEN_STORE_UNAVAILABLE: "deny"
 
-  # Credentials are not here: RATELIMITER_INFINISPAN_USERNAME / _PASSWORD come from a Secret,
+  # Credentials are not here: INFINISPAN_USERNAME / _PASSWORD come from a Secret,
   # see README.md.
 
   # Heap ceiling inside the container limit.

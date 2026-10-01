@@ -24,14 +24,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = {
         "ratelimiter.when-store-unavailable=allow",
-        "ratelimiter.infinispan.connect-timeout=500ms",
+        "infinispan.remote.connect-timeout=500",
         "management.endpoint.health.probes.enabled=true"})
 @AutoConfigureMockMvc
 class StoreUnavailableApiTest {
 
     @DynamicPropertySource
     static void nothingListening(DynamicPropertyRegistry registry) {
-        registry.add("ratelimiter.infinispan.servers", HotRodTestServer::deadAddress);
+        registry.add("infinispan.remote.server-list", HotRodTestServer::deadAddress);
     }
 
     @Autowired

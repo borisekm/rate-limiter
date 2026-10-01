@@ -1,13 +1,12 @@
 # rate-limiter
 
 Token-bucket rate limiter service on Spring Boot 4, with the buckets held on a remote Infinispan /
-Red Hat Data Grid server (Hot Rod client 16).
+Red Hat Data Grid server (Infinispan remote starter, Hot Rod client 16).
 
 ```bash
 mvn clean verify          # generates the API, compiles, runs tests (the tests start an Infinispan container)
 docker compose up -d infinispan
-RATELIMITER_INFINISPAN_USERNAME=ratelimiter RATELIMITER_INFINISPAN_PASSWORD=ratelimiter \
-  RATELIMITER_INFINISPAN_INTELLIGENCE=BASIC mvn spring-boot:run
+INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn spring-boot:run
 
 curl -s -X POST localhost:8051/v1/rate/check \
   -H 'Content-Type: application/json' \
@@ -69,19 +68,32 @@ The buckets live in the cache `rate-limit-buckets` on an Infinispan server, reac
 on OpenShift the namespace's Red Hat Data Grid cluster. The service itself is stateless: replicas
 never talk to each other and share their limits only through that cache.
 
+The client is the Infinispan Spring Boot 4 remote starter's `RemoteCacheManager`, configured under
+`infinispan.remote` (any key can come from the environment, e.g. `INFINISPAN_REMOTE_SERVER_LIST`):
+
 ```yaml
-ratelimiter:
-  infinispan:
-    servers: localhost:11222       # host:port[;host:port...]
-    username: ...                  # SCRAM; both unset = no authentication
-    password: ...
-    tls:
-      enabled: true
-      trust-store: /path/to/ca.crt # PEM; unset = the JVM's trust store
-    intelligence: HASH_DISTRIBUTION_AWARE   # BASIC when the server pods' own IPs are not reachable
-    connect-timeout: 2s
-    socket-timeout: 2s
+infinispan:
+  remote:
+    server-list: localhost:11222   # host:port[;host:port...]
+    use-auth: true                 # SCRAM
+    auth-username: ${INFINISPAN_USERNAME:ratelimiter}
+    auth-password: ${INFINISPAN_PASSWORD:ratelimiter}
+    use-ssl: true                  # on OpenShift, with:
+    trust-store-type: PEM
+    trust-store-file-name: /path/to/ca.crt
+    sni-host-name: datagrid        # the name the certificate is checked against
+    client-intelligence: HASH_DISTRIBUTION_AWARE   # BASIC when the server pods' own IPs are not reachable
+    connect-timeout: 500           # ms
+    socket-timeout: 2000           # ms
+    marshaller: org.infinispan.commons.marshall.ProtoStreamMarshaller
+    cache:
+      enabled: false               # no Spring CacheManager - see below
 ```
+
+Two of those are not the starter's defaults on purpose. Its default marshaller is Java serialization;
+the buckets cache is pinned to ProtoStream in code anyway (`HotRodConfig.addBucketsCache`). And its
+Spring `CacheManager` lists the server's caches at startup for cache metrics, which would stop the
+app from starting without the store.
 
 The app creates the cache on first use if the server does not have it, with this definition
 (`HotRodConfig.BUCKETS_CACHE_DEFINITION`); an existing cache of that name is used as it is, so the
@@ -133,8 +145,7 @@ of the Service would turn fail-open into an outage.
 | `core/RateLimiter` | bucket naming, the Bucket4j configuration per resource, the decision, the outage fallback |
 | `core/HotRodProxyManager` | Bucket4j over a Hot Rod `RemoteCache` by versioned compare-and-swap |
 | `config/RateLimiterProperties` | per-resource policies, derived bucket lifespan, `when-store-unavailable` |
-| `config/InfinispanClientProperties` | how to reach the server (`ratelimiter.infinispan.*`) |
-| `config/HotRodConfig` | the `RemoteCacheManager`, the buckets cache definition, and the wall `Clock` bean |
+| `config/HotRodConfig` | the buckets cache definition, added to the starter's `RemoteCacheManager`, and the wall `Clock` bean |
 | `config/BucketStoreHealthIndicator` | `bucketStore` in `/actuator/health` |
 | `config/ResourceConverter` | binds `ratelimiter.resources` keys by wire value |
 | `config/ValidationConfig`, `config/EnumSizeValidator` | let `@Size` apply to an enum - see below |
@@ -171,7 +182,7 @@ that is a lost update and quietly over-admits.
 The tests run against a real Infinispan server in a container (`HotRodTestServer`, Testcontainers,
 `quay.io/infinispan/server:15.2` - the generation Data Grid 8.x is built on; override with
 `-Dinfinispan.image=...`), started once per JVM, with SCRAM credentials, the app creating its own
-cache, and the real client configuration from `HotRodConfig`. So Docker has to be running for
+cache, and the same cache definition from `HotRodConfig`. So Docker has to be running for
 `mvn test`. An in-JVM Hot Rod server is not an option: Infinispan 16's server modules are built for
 Java 25, this project for 21.
 

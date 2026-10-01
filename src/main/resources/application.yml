@@ -5,20 +5,37 @@ spring:
 server:
   port: 8051
 
+# The Infinispan / Data Grid server holding the buckets, read by the Infinispan remote starter.
+# Locally: the one in compose.yaml. Any key can be overridden from the environment, e.g.
+# INFINISPAN_REMOTE_SERVER_LIST.
+infinispan:
+  remote:
+    enabled: true
+    server-list: localhost:11222
+    use-auth: true
+    auth-realm: default
+    auth-username: ${INFINISPAN_USERNAME:ratelimiter}
+    auth-password: ${INFINISPAN_PASSWORD:ratelimiter}
+    # HASH_DISTRIBUTION_AWARE sends each request straight to the key's owner and needs the server pods'
+    # own IPs to be reachable; BASIC talks only to server-list, for when they are not.
+    client-intelligence: HASH_DISTRIBUTION_AWARE
+    # Milliseconds. Bounds how long a check can hang while the server is gone.
+    connect-timeout: 500
+    socket-timeout: 2000
+    # Not the starter's default (Java serialization): keys are strings and values Bucket4j's byte[],
+    # both native to ProtoStream, so the server needs no schema and no Java allow-list.
+    marshaller: org.infinispan.commons.marshall.ProtoStreamMarshaller
+    # No Spring CacheManager on top: nothing here uses Spring's cache abstraction, and its cache
+    # metrics list the server's caches at startup, so the app would not start without the store.
+    cache:
+      enabled: false
+
 # One policy per resource from the Resource enum in the OpenAPI spec. Keys must match the
 # enum's wire values exactly. Each policy applies per identifier: buckets are named
 # <resource>@<identifier>, e.g. subjectSearch@10.0.0.7 or maxCallsSess@org-42.
 # A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
 # Buckets are dropped once they would have refilled to capacity anyway (derived, not configured).
 ratelimiter:
-  # The Infinispan / Data Grid server holding the buckets. Locally: the one in compose.yaml.
-  infinispan:
-    servers: localhost:11222
-    # username:            # both unset = no authentication
-    # password:
-    # tls:
-    #   enabled: true
-    #   trust-store: /path/to/ca.crt     # PEM; unset = the JVM's default trust store
   # The answer while that server cannot be reached: allow (fail open) or deny (fail closed). The code
   # has no default; this is the local one, and each deployed environment sets its own in
   # k8s/configmap.yaml. Either way the answer carries an X-RateLimit-Degraded header and a warning is
@@ -76,11 +93,12 @@ management:
       probes:
         enabled: true
 
-ratelimiter:
-  infinispan:
-    # The Data Grid operator's defaults on OpenShift: TLS with a certificate signed by the service CA,
-    # which OpenShift mounts into every pod, and SCRAM credentials (RATELIMITER_INFINISPAN_USERNAME /
-    # _PASSWORD). The server address is per environment - see k8s/configmap.yaml.
-    tls:
-      enabled: true
-      trust-store: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+# The Data Grid operator's defaults on OpenShift: TLS with a certificate signed by the service CA,
+# which OpenShift mounts into every pod, and SCRAM credentials (INFINISPAN_USERNAME / _PASSWORD). The
+# server address and the name its certificate is checked against are per environment - see
+# k8s/configmap.yaml.
+infinispan:
+  remote:
+    use-ssl: true
+    trust-store-type: PEM
+    trust-store-file-name: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

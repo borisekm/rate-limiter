@@ -55,7 +55,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: rate-limiter-config
-            # RATELIMITER_INFINISPAN_USERNAME / _PASSWORD for Data Grid - see README.md.
+            # INFINISPAN_USERNAME / _PASSWORD for Data Grid - see README.md.
             - secretRef:
                 name: rate-limiter-datagrid
           env:

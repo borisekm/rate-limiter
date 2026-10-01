@@ -5,7 +5,7 @@ Guidance for Claude Code when working in this repository.
 ## What this is
 
 A distributed token-bucket rate limiter: Spring Boot 4 (Java 21), a remote Infinispan / Red Hat Data
-Grid server (Hot Rod client 16) for the shared bucket state, API generated from an OpenAPI spec. See
+Grid server (Infinispan Spring Boot 4 remote starter, Hot Rod client 16) for the shared bucket state, API generated from an OpenAPI spec. See
 README.md for the user-facing description.
 
 ## Commands
@@ -14,8 +14,7 @@ README.md for the user-facing description.
 mvn -o test                 # needs Docker: the tests start an Infinispan server container
 mvn -o clean verify
 docker compose up -d infinispan
-RATELIMITER_INFINISPAN_USERNAME=ratelimiter RATELIMITER_INFINISPAN_PASSWORD=ratelimiter \
-  RATELIMITER_INFINISPAN_INTELLIGENCE=BASIC mvn -o spring-boot:run      # port 8051
+INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn -o spring-boot:run      # port 8051
 curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
 ```
@@ -52,6 +51,15 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 - **Values are Bucket4j's own `byte[]`, keys are strings** - both native to ProtoStream, so no schema
   is registered on the server and the project defines no `@Proto` types. Keep it that way: we do not
   own the Data Grid server, and anything that needs a schema or code deployed there is a negotiation.
+- **The `RemoteCacheManager` is the Infinispan remote starter's** (`infinispan-spring-boot4-starter-remote`),
+  configured by `infinispan.remote.*` in `application.yml`; `HotRodConfig` only adds the buckets
+  cache through an `InfinispanRemoteCacheCustomizer`. Keep `infinispan.remote.cache.enabled: false`:
+  the starter's Spring `CacheManager` is bound by Boot's cache metrics at startup, which calls the
+  server and stops the app from starting without the store (`spring.autoconfigure.exclude` does not
+  help - the starter component-scans that class in). The starter defaults to Java serialization, so
+  the buckets cache pins `ProtoStreamMarshaller` per cache. Not every key in the starter's examples
+  binds: there is no setter for `java-serial-whitelist` (it is `java-serial-allow-list`) or
+  `sni-hostname-validation`, and Spring ignores unknown keys silently.
 - **The app creates `rate-limit-buckets` itself** from `HotRodConfig.BUCKETS_CACHE_DEFINITION` when
   the server lacks it; an existing cache is used as it is, so changing the definition does nothing on
   a server that already has the cache.
@@ -70,8 +78,9 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 - **On OpenShift the store is Red Hat Data Grid 8.6 (operator), same namespace.** The Kubernetes
   document of `application.yml` turns on TLS trusting the pod's
   `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt` (the operator's default certificate
-  is signed by the service CA); the server address and `when-store-unavailable` come from
-  `k8s/configmap.yaml`, credentials from the `rate-limiter-datagrid` Secret. Data Grid 8.6 is an older
+  is signed by the service CA); the server address, its SNI host name and `when-store-unavailable`
+  come from `k8s/configmap.yaml`, credentials (`INFINISPAN_USERNAME` / `_PASSWORD`) from the
+  `rate-limiter-datagrid` Secret. Data Grid 8.6 is an older
   server generation than our 16.x client; Hot Rod negotiates the protocol, and the tests run against
   a 15.2 server for that reason.
 - **The OpenShift shape lives in `application.yml`, not in the pod spec.** A second document guarded
@@ -85,7 +94,7 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 
 Every test that touches the store runs against a real Infinispan server in a container
 (`HotRodTestServer`: Testcontainers, `quay.io/infinispan/server:15.2`, one per JVM, SCRAM
-credentials, clients built by the real `HotRodConfig.clientConfiguration`). So `mvn test` needs
+credentials, clients carrying the app's cache definition via `HotRodConfig.addBucketsCache`). So `mvn test` needs
 Docker. Do not replace it with an in-JVM `HotRodServer`: Infinispan 16's server modules are Java 25
 class files and this project is on 21. Test clients use `BASIC` intelligence because the container
 advertises an address the host may not reach.

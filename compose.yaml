@@ -17,11 +17,11 @@ services:
     ports:
       - "8051:8051"
     environment:
-      RATELIMITER_INFINISPAN_SERVERS: infinispan:11222
-      RATELIMITER_INFINISPAN_USERNAME: ratelimiter
-      RATELIMITER_INFINISPAN_PASSWORD: ratelimiter
+      INFINISPAN_REMOTE_SERVER_LIST: infinispan:11222
+      INFINISPAN_USERNAME: ratelimiter
+      INFINISPAN_PASSWORD: ratelimiter
       # The server advertises its container address; BASIC keeps the client on the one above.
-      RATELIMITER_INFINISPAN_INTELLIGENCE: BASIC
+      INFINISPAN_REMOTE_CLIENT_INTELLIGENCE: BASIC
     depends_on:
       - infinispan
     restart: unless-stopped

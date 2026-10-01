@@ -1,12 +1,18 @@
 package com.example.ratelimiter.config;
 
-import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.commons.marshall.ProtoStreamMarshaller;
+import org.infinispan.spring.starter.remote.InfinispanRemoteCacheCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Clock;
 
+/**
+ * The {@code RemoteCacheManager} itself comes from the Infinispan remote starter, configured by
+ * {@code infinispan.remote.*} in application.yml. What this adds to it is not per environment: the
+ * buckets cache definition.
+ */
 @Configuration
 public class HotRodConfig {
 
@@ -36,39 +42,20 @@ public class HotRodConfig {
         return Clock.systemUTC();
     }
 
-    @Bean(destroyMethod = "stop")
-    RemoteCacheManager remoteCacheManager(InfinispanClientProperties props) {
-        return new RemoteCacheManager(clientConfiguration(props).build());
+    /** Applied by the starter after {@code infinispan.remote.*}, just before it builds the client. */
+    @Bean
+    InfinispanRemoteCacheCustomizer bucketsCacheCustomizer() {
+        return HotRodConfig::addBucketsCache;
     }
 
-    /** Public so the tests can connect to their in-JVM server exactly the way the app does. */
-    public static ConfigurationBuilder clientConfiguration(InfinispanClientProperties props) {
-        ConfigurationBuilder builder = new ConfigurationBuilder()
-                .addServers(props.servers())
-                .clientIntelligence(props.intelligence())
-                .connectionTimeout((int) props.connectTimeout().toMillis())
-                .socketTimeout((int) props.socketTimeout().toMillis());
-        builder.remoteCache(BUCKETS_CACHE).configuration(BUCKETS_CACHE_DEFINITION);
-
-        if (props.authenticated()) {
-            var auth = builder.security().authentication().enable()
-                    .username(props.username())
-                    .password(props.password());
-            if (props.saslMechanism() != null && !props.saslMechanism().isBlank()) {
-                auth.saslMechanism(props.saslMechanism());
-            }
-        }
-
-        InfinispanClientProperties.Tls tls = props.tls();
-        if (tls.enabled()) {
-            var ssl = builder.security().ssl().enable()
-                    .sniHostName(tls.sniHostName() != null && !tls.sniHostName().isBlank()
-                            ? tls.sniHostName()
-                            : props.firstServerHost());
-            if (tls.trustStore() != null && !tls.trustStore().isBlank()) {
-                ssl.trustStoreFileName(tls.trustStore()).trustStoreType(tls.trustStoreType());
-            }
-        }
-        return builder;
+    /**
+     * Public so the tests' clients create the cache exactly the way the app does. The marshaller is
+     * pinned per cache because the starter's default is Java serialization, which would store opaque
+     * Java-serialized blobs in a ProtoStream cache.
+     */
+    public static void addBucketsCache(ConfigurationBuilder builder) {
+        builder.remoteCache(BUCKETS_CACHE)
+                .configuration(BUCKETS_CACHE_DEFINITION)
+                .marshaller(ProtoStreamMarshaller.class);
     }
 }

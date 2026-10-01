@@ -1,9 +1,9 @@
 package com.example.ratelimiter;
 
 import com.example.ratelimiter.config.HotRodConfig;
-import com.example.ratelimiter.config.InfinispanClientProperties;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.ClientIntelligence;
+import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -47,7 +47,7 @@ public final class HotRodTestServer {
         return container.getHost() + ":" + container.getMappedPort(11222);
     }
 
-    /** A client configured exactly as the app configures its own, via {@link HotRodConfig}. */
+    /** A client for the shared server, with the buckets cache defined as the app defines it. */
     public static RemoteCacheManager newClient() {
         return client(address());
     }
@@ -57,10 +57,17 @@ public final class HotRodTestServer {
      * advertises its container-internal address, which the host may not be able to reach.
      */
     public static RemoteCacheManager client(String servers) {
-        InfinispanClientProperties props = new InfinispanClientProperties(servers, USERNAME, PASSWORD, null,
-                ClientIntelligence.BASIC, Duration.ofSeconds(1), Duration.ofSeconds(2),
-                new InfinispanClientProperties.Tls(false, null, "pem", null));
-        return new RemoteCacheManager(HotRodConfig.clientConfiguration(props).build());
+        ConfigurationBuilder builder = new ConfigurationBuilder()
+                .addServers(servers)
+                .clientIntelligence(ClientIntelligence.BASIC)
+                .connectionTimeout(1000)
+                .socketTimeout(2000);
+        builder.security().authentication().enable()
+                .realm("default")
+                .username(USERNAME)
+                .password(PASSWORD);
+        HotRodConfig.addBucketsCache(builder);
+        return new RemoteCacheManager(builder.build());
     }
 
     /** An address nothing listens on. */

@@ -31,16 +31,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         // On Kubernetes the Deployment passes the pod name here; anywhere else it is the hostname.
         "ratelimiter.instance-id=test-node-1",
         // The container advertises its internal address, which the host may not reach.
-        "ratelimiter.infinispan.intelligence=BASIC"})
+        "infinispan.remote.client-intelligence=BASIC"})
 @AutoConfigureMockMvc
 class RateLimitApiTest {
 
     /** The shared test server; every test uses a fresh random identifier, so buckets never collide. */
     @DynamicPropertySource
     static void infinispan(DynamicPropertyRegistry registry) {
-        registry.add("ratelimiter.infinispan.servers", HotRodTestServer::address);
-        registry.add("ratelimiter.infinispan.username", () -> HotRodTestServer.USERNAME);
-        registry.add("ratelimiter.infinispan.password", () -> HotRodTestServer.PASSWORD);
+        registry.add("infinispan.remote.server-list", HotRodTestServer::address);
+        registry.add("infinispan.remote.auth-username", () -> HotRodTestServer.USERNAME);
+        registry.add("infinispan.remote.auth-password", () -> HotRodTestServer.PASSWORD);
     }
 
     private static final long MINUTE_MILLIS = Duration.ofMinutes(1).toMillis();

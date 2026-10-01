@@ -50,13 +50,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Hot Rod client for the shared bucket cache on a remote Infinispan / Data Grid. Deliberately
-             not the Spring Boot remote starter: the RemoteCacheManager is built by hand in HotRodConfig,
-             where TLS, SASL and the cache definition are spelled out. The client negotiates the
-             protocol version, so this 16.x client talks to older servers (Data Grid 8.x) as well. -->
+        <!-- The RemoteCacheManager, configured from infinispan.remote.* in application.yml. Brings the
+             Hot Rod client 16, which negotiates the protocol, so it talks to older servers (Data Grid
+             8.x) as well. The buckets cache definition is added in code by HotRodConfig. -->
         <dependency>
             <groupId>org.infinispan</groupId>
-            <artifactId>infinispan-client-hotrod</artifactId>
+            <artifactId>infinispan-spring-boot4-starter-remote</artifactId>
         </dependency>
 
         <!-- Token-bucket algorithm. Its bucket4j_jdk17-infinispan module is embedded-only (an entry
