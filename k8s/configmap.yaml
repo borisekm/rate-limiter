@@ -16,6 +16,8 @@ data:
   INFINISPAN_REMOTE_SERVER_LIST: "datagrid:11222"
   # What the TLS certificate is checked against: the same Service's name, as the service CA issued it.
   INFINISPAN_REMOTE_SNI_HOST_NAME: "datagrid"
+  # Escape hatch only: "false" stops checking the certificate against that name. Fix the name instead.
+  # RATELIMITER_TLS_HOSTNAME_VALIDATION: "false"
 
   # The answer while Data Grid cannot be reached: "allow" (fail open) or "deny" (fail closed).
   # Chosen per environment on purpose. Degraded answers carry an X-RateLimit-Degraded header and

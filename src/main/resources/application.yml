@@ -41,6 +41,11 @@ ratelimiter:
   # k8s/configmap.yaml. Either way the answer carries an X-RateLimit-Degraded header and a warning is
   # logged.
   when-store-unavailable: deny
+  # Whether the Hot Rod client checks the store's TLS certificate against infinispan.remote.sni-host-name
+  # (only matters with use-ssl). Leave it on and set the SNI host name; turning it off makes the client
+  # accept any certificate the trust store does, for any server - a temporary escape hatch for
+  # ISPN004112 ("The SNI hostname is required when hostname validation is enabled").
+  tls-hostname-validation: true
   resources:
     subjectSearch:            # calls into the subject service
       capacity: 15

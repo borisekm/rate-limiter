@@ -3,6 +3,9 @@ package com.example.ratelimiter.config;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
 import org.infinispan.commons.marshall.ProtoStreamMarshaller;
 import org.infinispan.spring.starter.remote.InfinispanRemoteCacheCustomizer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,6 +18,8 @@ import java.time.Clock;
  */
 @Configuration
 public class HotRodConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(HotRodConfig.class);
 
     public static final String BUCKETS_CACHE = "rate-limit-buckets";
 
@@ -42,10 +47,27 @@ public class HotRodConfig {
         return Clock.systemUTC();
     }
 
-    /** Applied by the starter after {@code infinispan.remote.*}, just before it builds the client. */
+    /**
+     * Applied by the starter after {@code infinispan.remote.*}, just before it builds the client.
+     *
+     * @param hostnameValidation {@code ratelimiter.tls-hostname-validation}. The starter has no key for
+     *                           it, so it is set here. Off, the client no longer checks the server's
+     *                           certificate against {@code infinispan.remote.sni-host-name} (which may
+     *                           then be left unset): any certificate the trust store accepts is
+     *                           accepted for any server. An escape hatch, not a setting.
+     */
     @Bean
-    InfinispanRemoteCacheCustomizer bucketsCacheCustomizer() {
-        return HotRodConfig::addBucketsCache;
+    InfinispanRemoteCacheCustomizer bucketsCacheCustomizer(
+            @Value("${ratelimiter.tls-hostname-validation:true}") boolean hostnameValidation) {
+        return builder -> {
+            addBucketsCache(builder);
+            // hostnameValidation(...) also switches TLS on, so only touch it where TLS already is.
+            if (!hostnameValidation && builder.build(false).security().ssl().enabled()) {
+                log.warn("TLS hostname validation towards the bucket store is OFF "
+                        + "(ratelimiter.tls-hostname-validation=false); set infinispan.remote.sni-host-name instead");
+                builder.security().ssl().hostnameValidation(false);
+            }
+        };
     }
 
     /**

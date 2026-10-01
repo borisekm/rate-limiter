@@ -59,7 +59,10 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
   help - the starter component-scans that class in). The starter defaults to Java serialization, so
   the buckets cache pins `ProtoStreamMarshaller` per cache. Not every key in the starter's examples
   binds: there is no setter for `java-serial-whitelist` (it is `java-serial-allow-list`) or
-  `sni-hostname-validation`, and Spring ignores unknown keys silently.
+  `sni-hostname-validation`, and Spring ignores unknown keys silently. Hostname validation is
+  therefore our own flag, `ratelimiter.tls-hostname-validation` (default `true`), applied in
+  `HotRodConfig`'s customizer only when TLS is already on - the client's `ssl().hostnameValidation(..)`
+  silently enables TLS. It is an escape hatch for ISPN004112; the fix is `infinispan.remote.sni-host-name`.
 - **The app creates `rate-limit-buckets` itself** from `HotRodConfig.BUCKETS_CACHE_DEFINITION` when
   the server lacks it; an existing cache is used as it is, so changing the definition does nothing on
   a server that already has the cache.
