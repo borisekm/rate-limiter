@@ -11,8 +11,8 @@ README.md for the user-facing description.
 ## Commands
 
 ```bash
-mvn -o test                 # needs Docker: the tests start an Infinispan server container
-mvn -o clean verify
+mvn -o test                 # Docker optional: the server tests skip themselves without it
+mvn -o clean verify -DskipContainerTests   # what CI runs (no container runtime); 95% JaCoCo gate
 docker compose up -d infinispan
 INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn -o spring-boot:run      # port 8051
 curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json' \
@@ -92,19 +92,34 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 
 ## Testing
 
-Every test that touches the store runs against a real Infinispan server in a container
-(`HotRodTestServer`: Testcontainers, `quay.io/infinispan/server:15.2`, one per JVM, SCRAM
-credentials, clients carrying the app's cache definition via `HotRodConfig.addBucketsCache`). So `mvn test` needs
-Docker. Do not replace it with an in-JVM `HotRodServer`: Infinispan 16's server modules are Java 25
-class files and this project is on 21. Test clients use `BASIC` intelligence because the container
-advertises an address the host may not reach.
+CI (Jenkins) has no container runtime, so every store-touching test is written once as a contract
+and runs over two stores. `RateLimiterContract` / `RateLimitApiContract` hold the tests;
+`RateLimiterTest` / `RateLimitApiTest` run them over `InMemoryRemoteCache` (always), and
+`RateLimiterServerTest` / `RateLimitApiServerTest` over a real server (`HotRodTestServer`:
+Testcontainers, `quay.io/infinispan/server:15.2`, one per JVM, SCRAM credentials, clients carrying the
+app's cache definition via `HotRodConfig.addBucketsCache`), guarded by
+`@EnabledIf(HotRodTestServer#dockerAvailable)` - skipped without Docker or with `-DskipContainerTests`.
+Put new store behaviour in the contract so both run it. Do not replace the container with an in-JVM
+`HotRodServer`: Infinispan 16's server modules are Java 25 class files and this project is on 21. Test
+clients use `BASIC` intelligence because the container advertises an address the host may not reach.
 
-`RateLimiterTest` drives the limiter over that server with `MutableClock` (the shared test clock in
-`src/test/java/com/example/ratelimiter`), clearing the cache between tests - prefer extending it over
-mocking the cache. It covers exact capacity under concurrency, two clients sharing one bucket,
-stepwise refill, capping, per-resource/per-identifier isolation, the daily quota, retry-after in all
-its forms, the per-write lifespan, both fallback directions against an address nothing listens on,
-and config completeness.
+`InMemoryRemoteCache` is a dynamic proxy faking only what the limiter calls, with Hot Rod's semantics:
+a version per write, `replaceWithVersion` against it, `putIfAbsent` returning null unless
+`FORCE_RETURN_VALUE`, lifespans on the test clock, `goDown()` for an outage. Anything else - plain
+`put`/`replace` included - throws, so an unversioned write fails the build instead of passing on a
+lenient fake. If the limiter starts calling a new cache method, add it there with the server's
+semantics, not a stub.
+
+`RateLimiterTest` drives the limiter with `MutableClock` (the shared test clock in
+`src/test/java/com/example/ratelimiter`) - prefer extending it over mocking the cache. It covers exact
+capacity under concurrency, two clients sharing one bucket, stepwise refill, capping,
+per-resource/per-identifier isolation, the daily quota, retry-after in all its forms, the per-write
+lifespan, outages and recovery (including the throttled warning, which runs on the injected clock),
+both fallback directions with the real client against an address nothing listens on, and config
+completeness.
+
+`mvn verify` enforces 95% line and branch coverage (JaCoCo) of the hand-written code; generated API
+classes and `RateLimiterApplication` are excluded in the pom. The gate must hold without Docker.
 
 `RateLimitApiTest` is the Spring context test over MockMvc: the wire contract plus proof that
 configuration binding works. `StoreUnavailableApiTest` boots the app with no reachable server and

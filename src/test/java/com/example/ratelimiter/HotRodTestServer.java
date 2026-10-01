@@ -4,6 +4,7 @@ import com.example.ratelimiter.config.HotRodConfig;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.ClientIntelligence;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -19,6 +20,10 @@ import java.time.Duration;
  * app creating its own cache - against the server generation Data Grid 8.x is built on.
  *
  * <p>Override the image with {@code -Dinfinispan.image=...} to try another server version.
+ *
+ * <p>Tests that need it are guarded by {@link #dockerAvailable()} and skipped where there is no
+ * container runtime (the CI build); the in-memory fake ({@code InMemoryRemoteCache}) covers the same
+ * contract there.
  */
 public final class HotRodTestServer {
 
@@ -30,6 +35,14 @@ public final class HotRodTestServer {
     private static GenericContainer<?> container;
 
     private HotRodTestServer() {
+    }
+
+    /**
+     * For {@code @EnabledIf}: whether a container runtime is reachable from this JVM. Without one the
+     * server tests skip themselves; {@code -DskipContainerTests} skips them without probing for one.
+     */
+    public static boolean dockerAvailable() {
+        return !Boolean.getBoolean("skipContainerTests") && DockerClientFactory.instance().isDockerAvailable();
     }
 
     /** Starts the container on first use; Testcontainers removes it when the JVM exits. */

@@ -175,7 +175,7 @@ public class RateLimiter {
     private Decision storeUnavailable(ResourcePolicy policy, HotRodClientException cause) {
         boolean allow = props.whenStoreUnavailable() == WhenStoreUnavailable.ALLOW;
         long degraded = degradedSinceLastLog.incrementAndGet();
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         long last = lastOutageLog.get();
         boolean firstFailure = storeDown.compareAndSet(false, true);
         if ((firstFailure || now - last >= OUTAGE_LOG_INTERVAL_MILLIS) && lastOutageLog.compareAndSet(last, now)) {
@@ -195,10 +195,8 @@ public class RateLimiter {
         }
     }
 
+    /** Rounded up, so a wait under a millisecond is not reported as none; never negative. */
     private static long toMillis(long nanos) {
-        if (nanos <= 0) {
-            return 0;
-        }
         return Math.max(0, (nanos + 999_999L) / 1_000_000L);
     }
 

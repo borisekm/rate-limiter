@@ -4,7 +4,7 @@ Token-bucket rate limiter service on Spring Boot 4, with the buckets held on a r
 Red Hat Data Grid server (Infinispan remote starter, Hot Rod client 16).
 
 ```bash
-mvn clean verify          # generates the API, compiles, runs tests (the tests start an Infinispan container)
+mvn clean verify          # generates the API, compiles, runs tests, enforces 95% coverage (Docker optional)
 docker compose up -d infinispan
 INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn spring-boot:run
 
@@ -179,12 +179,22 @@ that is a lost update and quietly over-admits.
 
 ## Tests
 
-The tests run against a real Infinispan server in a container (`HotRodTestServer`, Testcontainers,
-`quay.io/infinispan/server:15.2` - the generation Data Grid 8.x is built on; override with
-`-Dinfinispan.image=...`), started once per JVM, with SCRAM credentials, the app creating its own
-cache, and the same cache definition from `HotRodConfig`. So Docker has to be running for
-`mvn test`. An in-JVM Hot Rod server is not an option: Infinispan 16's server modules are built for
-Java 25, this project for 21.
+The limiter and API tests are written once as contracts and run over two stores:
+
+- **`InMemoryRemoteCache`** - an in-JVM fake of the buckets `RemoteCache` that keeps the Hot Rod
+  semantics the limiter relies on (versioned `replaceWithVersion`, `putIfAbsent` returning null
+  without `FORCE_RETURN_VALUE`, per-write lifespans, a switchable outage) and refuses plain
+  `put`/`replace`. Always runs, so the build needs no container runtime (`RateLimiterTest`,
+  `RateLimitApiTest`).
+- **A real Infinispan server** in a container (`HotRodTestServer`, Testcontainers,
+  `quay.io/infinispan/server:15.2` - the generation Data Grid 8.x is built on; override with
+  `-Dinfinispan.image=...`), with SCRAM credentials, the app creating its own cache, and the same
+  cache definition from `HotRodConfig` (`RateLimiterServerTest`, `RateLimitApiServerTest`). These skip
+  themselves when there is no Docker, or with `-DskipContainerTests`.
+
+An in-JVM Hot Rod server is not an option: Infinispan 16's server modules are built for Java 25, this
+project for 21. `mvn verify` fails below 95% line or branch coverage of the hand-written code (JaCoCo;
+report in `target/site/jacoco/index.html`), and the gate holds on the fake alone.
 
 ## Containers and Kubernetes
 

@@ -22,6 +22,7 @@
         <infinispan.version>16.2.3</infinispan.version>
         <bucket4j.version>8.19.0</bucket4j.version>
         <openapi-generator.version>7.14.0</openapi-generator.version>
+        <jacoco.version>0.8.14</jacoco.version>
     </properties>
 
     <dependencyManagement>
@@ -103,6 +104,66 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <!-- Coverage of the hand-written code, enforced by `mvn verify`. The tests that need Docker
+                 skip themselves where there is none, so the gate has to hold on the in-memory fake alone.
+                 Report: target/site/jacoco/index.html -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <configuration>
+                    <excludes>
+                        <!-- Generated from the OpenAPI spec; RateLimitApiDelegateImpl is the only hand-written class there -->
+                        <exclude>com/example/ratelimiter/api/model/**</exclude>
+                        <exclude>com/example/ratelimiter/api/ApiUtil*</exclude>
+                        <exclude>com/example/ratelimiter/api/RateLimitApi.class</exclude>
+                        <exclude>com/example/ratelimiter/api/RateLimitApi$*</exclude>
+                        <exclude>com/example/ratelimiter/api/RateLimitApiController*</exclude>
+                        <exclude>com/example/ratelimiter/api/RateLimitApiDelegate.class</exclude>
+                        <exclude>com/example/ratelimiter/RateLimiterApplication*</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.95</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.95</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
