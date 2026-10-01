@@ -90,13 +90,6 @@
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- A real Infinispan server for the tests (HotRodTestServer). Not an in-JVM HotRodServer:
-             Infinispan 16's server modules are built for Java 25, and this project is on 21. -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
@@ -106,8 +99,7 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
 
-            <!-- Coverage of the hand-written code, enforced by `mvn verify`. The tests that need Docker
-                 skip themselves where there is none, so the gate has to hold on the in-memory fake alone.
+            <!-- Coverage of the hand-written code, enforced by `mvn verify`.
                  Report: target/site/jacoco/index.html -->
             <plugin>
                 <groupId>org.jacoco</groupId>

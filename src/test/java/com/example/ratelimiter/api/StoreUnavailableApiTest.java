@@ -1,6 +1,6 @@
 package com.example.ratelimiter.api;
 
-import com.example.ratelimiter.HotRodTestServer;
+import com.example.ratelimiter.HotRodTestClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,7 +31,7 @@ class StoreUnavailableApiTest {
 
     @DynamicPropertySource
     static void nothingListening(DynamicPropertyRegistry registry) {
-        registry.add("infinispan.remote.server-list", HotRodTestServer::deadAddress);
+        registry.add("infinispan.remote.server-list", HotRodTestClient::deadAddress);
     }
 
     @Autowired
