@@ -20,7 +20,8 @@ WORKDIR /app
 
 # Stateless: the buckets live on the Infinispan server, so the image needs no writable path.
 RUN addgroup -g 1000 -S app && adduser -u 1000 -S -G app app
-USER app
+# Numeric, not `app`: with runAsNonRoot the kubelet refuses a named user it cannot verify is not root.
+USER 1000:1000
 
 COPY --from=build /build/app.jar app.jar
 

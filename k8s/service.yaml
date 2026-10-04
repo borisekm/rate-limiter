@@ -41,7 +41,7 @@ spec:
 ---
 # Test-cluster only: the chart's Service is ClusterIP, so there is no counterpart to this on sa-t
 # (there a Route or the platform's ingress publishes the app). Reach it on
-# http://<any node IP>:30851/v1/rate/check
+# http://<any node IP>:30852/v1/rate/check
 apiVersion: v1
 kind: Service
 metadata:
@@ -58,4 +58,4 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30851
+      nodePort: 30852

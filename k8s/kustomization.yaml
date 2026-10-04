@@ -7,6 +7,38 @@ resources:
   - configmap.yaml
   - service.yaml
   - deployment.yaml
+# Test cluster only - drop on sa-t. The lab's Data Grid is operator-managed like sa-t's, but lives in
+# its own namespace (`infinispan`) and its certificate (Secret infinispan-tls) is signed by the lab
+# CA, not by an OpenShift service CA - kubeadm has none. That CA is copied into this namespace as
+# the Secret rate-limiter-datagrid-ca and mounted; see README.md.
+patches:
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: rate-limiter-config
+      data:
+        INFINISPAN_REMOTE_SERVER_LIST: "infinispan.infinispan.svc:11222"
+        INFINISPAN_REMOTE_SNI_HOST_NAME: "infinispan.infinispan.svc"
+        INFINISPAN_REMOTE_TRUST_STORE_FILE_NAME: "/etc/datagrid-ca/ca.crt"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rate-limiter
+      spec:
+        template:
+          spec:
+            containers:
+              - name: rate-limiter
+                volumeMounts:
+                  - name: datagrid-ca
+                    mountPath: /etc/datagrid-ca
+                    readOnly: true
+            volumes:
+              - name: datagrid-ca
+                secret:
+                  secretName: rate-limiter-datagrid-ca
 images:
   # Test cluster only. On sa-t the image comes from the platform registry, so this becomes a plain
   #   - name: rate-limiter
@@ -19,4 +51,4 @@ images:
   # rewrites this line with whatever it pushed.
   - name: rate-limiter
     newName: localhost:5000/rate-limiter
-    digest: sha256:b85e19eda568b8bc768112dc113ff72ec8caccab37e3672b3f0e3a0044a63053
+    digest: sha256:f3a78550bc90f34fa50bdd5135adc026115e91cb75f7d03c5112f31ce36862bb

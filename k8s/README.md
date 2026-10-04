@@ -106,10 +106,35 @@ The same manifests run on the local kubeadm cluster (`~/.kube/local-k8s-cluster.
 before handing anything to the platform team. There `namespace.yaml` and `service.yaml` do apply,
 and `service.yaml` adds a NodePort that has no counterpart on `sa-t`.
 
-That cluster has no Data Grid operator and no service CA, so it needs an Infinispan server of its
-own (e.g. `quay.io/infinispan/server:15.2` behind a Service named `datagrid`, with `USER`/`PASS`
-matching the Secret) and TLS switched off with `INFINISPAN_REMOTE_USE_SSL=false`. Without
-one the pods still start and answer - with the fallback.
+That cluster runs Data Grid 8.6 through the operator too (CR `infinispan`, 3 pods), but in its own
+namespace `infinispan`, with authorization on and a certificate from the lab CA
+(`~/k8s-lab-build/infinispan-tls/`) instead of a service CA, which kubeadm does not have. The
+`patches:` in `kustomization.yaml` cover that - server `infinispan.infinispan.svc:11222`, the same
+name as SNI host, the CA mounted from the Secret `rate-limiter-datagrid-ca` - and are lab-only. Once
+per cluster:
+
+```bash
+export KUBECONFIG=~/.kube/local-k8s-cluster.yaml
+ISPN=https://192.168.250.240:11222
+CA=~/k8s-lab-build/infinispan-tls/ca.crt
+ids=$(kubectl -n infinispan get secret infinispan-identities -o jsonpath='{.data.identities\.yaml}' | base64 -d)
+ADMIN_PASS=$(echo "$ids" | awk '/username: admin/{f=1} f&&/password:/{print $2; exit}')
+USER_PASS=$(echo "$ids"  | awk '/username: user/{f=1}  f&&/password:/{print $2; exit}')
+
+# `user` has the `application` role - read/write, but no cache creation - so admin creates the
+# cache, with HotRodConfig.BUCKETS_CACHE_DEFINITION.
+curl --cacert "$CA" -u "admin:$ADMIN_PASS" -X POST -H 'Content-Type: application/json' \
+  "$ISPN/rest/v2/caches/rate-limit-buckets" \
+  -d '{"distributed-cache":{"mode":"SYNC","owners":2,"statistics":true,"encoding":{"media-type":"application/x-protostream"}}}'
+
+kubectl apply -f k8s/namespace.yaml
+kubectl -n sa-t create secret generic rate-limiter-datagrid \
+  --from-literal=INFINISPAN_USERNAME=user --from-literal=INFINISPAN_PASSWORD="$USER_PASS"
+kubectl -n sa-t create secret generic rate-limiter-datagrid-ca --from-file=ca.crt="$CA"
+```
+
+From the developer host, the same cluster is reachable on its LoadBalancer address with
+`SPRING_PROFILES_ACTIVE=k8s-lab` - see `src/main/resources/application-k8s-lab.yml`.
 
 There is no `~/.kube/config` on this machine, so **every** `kubectl` here needs `KUBECONFIG` set.
 Without it kubectl falls back to `http://localhost:8080`, where open-webui answers with an HTML page,
@@ -121,7 +146,7 @@ export KUBECONFIG=~/.kube/local-k8s-cluster.yaml
 kubectl apply -k k8s
 kubectl -n sa-t rollout status deployment/rate-limiter
 
-curl -s -X POST http://192.168.250.11:30851/v1/rate/check \
+curl -s -X POST http://192.168.250.11:30852/v1/rate/check \
   -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
 ```

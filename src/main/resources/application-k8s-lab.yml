@@ -1,0 +1,22 @@
+# Running from the developer host against the lab cluster's Data Grid (namespace `infinispan`,
+# operator-managed, 3 pods), published on the MetalLB address below. See k8s/README.md.
+#
+#   export KUBECONFIG=~/.kube/local-k8s-cluster.yaml
+#   INFINISPAN_USERNAME=user \
+#   INFINISPAN_PASSWORD=$(kubectl -n infinispan get secret infinispan-identities \
+#       -o jsonpath='{.data.identities\.yaml}' | base64 -d \
+#       | awk '/username: user/{f=1} f&&/password:/{print $2; exit}') \
+#   SPRING_PROFILES_ACTIVE=k8s-lab mvn -o spring-boot:run
+#
+# The cluster has authorization on and `user` only holds the `application` role (read/write, no
+# cache creation), so `rate-limit-buckets` has to exist there already - see k8s/README.md.
+infinispan:
+  remote:
+    server-list: 192.168.250.240:11222
+    # The server advertises its pod IPs, which are not routable from outside the cluster.
+    client-intelligence: BASIC
+    # The CR uses its own certificate (Secret infinispan-tls), issued by the lab CA.
+    use-ssl: true
+    trust-store-type: PEM
+    trust-store-file-name: ${user.home}/k8s-lab-build/infinispan-tls/ca.crt
+    sni-host-name: infinispan.infinispan.svc
