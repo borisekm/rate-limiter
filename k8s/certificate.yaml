@@ -1,0 +1,46 @@
+# Test cluster only - drop on sa-t (see README.md). The app's HTTPS certificate, issued and renewed
+# by cert-manager from the lab CA (ClusterIssuer lab-ca, k8s/cert-manager/). cert-manager writes the
+# kubernetes.io/tls Secret rate-limiter-tls, which the lab patches mount at /etc/rate-limiter-tls;
+# the app reloads the files when they change, so a renewal needs no restart.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rate-limiter-tls
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+spec:
+  secretName: rate-limiter-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: lab-ca
+  commonName: rate-limiter.sa-t.svc
+  # Short-lived on purpose: renewal is automatic, and it is what keeps the reload path exercised.
+  duration: 2160h      # 90 days
+  renewBefore: 720h    # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  # Every name a client may use: the Services inside the cluster, and every node IP, which is where
+  # the NodePort answers.
+  dnsNames:
+    - localhost
+    - rate-limiter
+    - rate-limiter.sa-t
+    - rate-limiter.sa-t.svc
+    - rate-limiter.sa-t.svc.cluster.local
+    - rate-limiter-nodeport
+    - rate-limiter-nodeport.sa-t
+    - rate-limiter-nodeport.sa-t.svc
+    - rate-limiter-nodeport.sa-t.svc.cluster.local
+  ipAddresses:
+    - 127.0.0.1
+    - 192.168.250.10   # control-1
+    - 192.168.250.11   # worker-1
+    - 192.168.250.12   # worker-2
+    - 192.168.250.13   # worker-3

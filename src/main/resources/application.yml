@@ -107,3 +107,33 @@ infinispan:
     use-ssl: true
     trust-store-type: PEM
     trust-store-file-name: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+
+---
+# --- HTTPS only ---------------------------------------------------------------------------------
+# Opt-in with the `https` profile (SPRING_PROFILES_ACTIVE=https): both the API and the actuator then
+# speak TLS only - there is no plain-HTTP listener left to fall back to. The certificate and key are
+# PEM files at a fixed path, which is where a `kubernetes.io/tls` Secret lands when mounted at
+# /etc/rate-limiter-tls (tls.crt / tls.key). Opt-in rather than part of the Kubernetes document: on
+# sa-t the certificate and the Route in front are the platform's to provide - see k8s/README.md.
+spring:
+  config:
+    activate:
+      on-profile: https
+  ssl:
+    bundle:
+      pem:
+        web:
+          keystore:
+            certificate: file:/etc/rate-limiter-tls/tls.crt
+            private-key: file:/etc/rate-limiter-tls/tls.key
+          # A renewed certificate in the Secret is picked up without a restart.
+          reload-on-update: true
+
+server:
+  ssl:
+    bundle: web
+# The actuator runs on its own port on Kubernetes and does not inherit server.ssl.
+management:
+  server:
+    ssl:
+      bundle: web

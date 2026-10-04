@@ -7,10 +7,14 @@ resources:
   - configmap.yaml
   - service.yaml
   - deployment.yaml
+  # Test cluster only - drop on sa-t: needs cert-manager and the lab-ca ClusterIssuer.
+  - certificate.yaml
 # Test cluster only - drop on sa-t. The lab's Data Grid is operator-managed like sa-t's, but lives in
 # its own namespace (`infinispan`) and its certificate (Secret infinispan-tls) is signed by the lab
 # CA, not by an OpenShift service CA - kubeadm has none. That CA is copied into this namespace as
-# the Secret rate-limiter-datagrid-ca and mounted; see README.md.
+# the Secret rate-limiter-datagrid-ca and mounted. The app itself serves HTTPS only here (the
+# `https` profile), with a certificate from the same lab CA in the Secret rate-limiter-tls, which
+# cert-manager issues and renews (certificate.yaml). See README.md.
 patches:
   - patch: |-
       apiVersion: v1
@@ -21,6 +25,7 @@ patches:
         INFINISPAN_REMOTE_SERVER_LIST: "infinispan.infinispan.svc:11222"
         INFINISPAN_REMOTE_SNI_HOST_NAME: "infinispan.infinispan.svc"
         INFINISPAN_REMOTE_TRUST_STORE_FILE_NAME: "/etc/datagrid-ca/ca.crt"
+        SPRING_PROFILES_ACTIVE: "https"
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -35,10 +40,23 @@ patches:
                   - name: datagrid-ca
                     mountPath: /etc/datagrid-ca
                     readOnly: true
+                  - name: tls
+                    mountPath: /etc/rate-limiter-tls
+                    readOnly: true
+                # The actuator is HTTPS too; the kubelet does not verify the certificate.
+                readinessProbe:
+                  httpGet:
+                    scheme: HTTPS
+                livenessProbe:
+                  httpGet:
+                    scheme: HTTPS
             volumes:
               - name: datagrid-ca
                 secret:
                   secretName: rate-limiter-datagrid-ca
+              - name: tls
+                secret:
+                  secretName: rate-limiter-tls
 images:
   # Test cluster only. On sa-t the image comes from the platform registry, so this becomes a plain
   #   - name: rate-limiter
@@ -51,4 +69,4 @@ images:
   # rewrites this line with whatever it pushed.
   - name: rate-limiter
     newName: localhost:5000/rate-limiter
-    digest: sha256:f3a78550bc90f34fa50bdd5135adc026115e91cb75f7d03c5112f31ce36862bb
+    digest: sha256:8dd01dac90043980e214b1cfd5e217bac41ca0e773dd47026e821c9035ad70d2

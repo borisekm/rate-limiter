@@ -41,7 +41,7 @@ spec:
 ---
 # Test-cluster only: the chart's Service is ClusterIP, so there is no counterpart to this on sa-t
 # (there a Route or the platform's ingress publishes the app). Reach it on
-# http://<any node IP>:30852/v1/rate/check
+# https://<any node IP>:30852/v1/rate/check (HTTPS only - see README.md)
 apiVersion: v1
 kind: Service
 metadata:

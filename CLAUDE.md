@@ -86,6 +86,12 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
   `rate-limiter-datagrid` Secret. Data Grid 8.6 is an older
   server generation than our 16.x client; Hot Rod negotiates the protocol; the tests cannot check
   that (they run on a fake), so try a client upgrade against a real server before shipping it.
+- **HTTPS is the `https` profile** (last document of `application.yml`): both ports serve TLS only
+  from the PEM pair at `/etc/rate-limiter-tls` (a mounted `kubernetes.io/tls` Secret) and reload
+  it when it changes. The lab patches in `k8s/kustomization.yaml` turn it on and move the probes to
+  HTTPS; the certificate comes from cert-manager (`k8s/certificate.yaml`, ClusterIssuer `lab-ca`
+  in `k8s/cert-manager/`). It is not in the Kubernetes document because on sa-t the certificate
+  and Route are the platform's.
 - **The OpenShift shape lives in `application.yml`, not in the pod spec.** A second document guarded
   by `spring.config.activate.on-cloud-platform: kubernetes` moves the app to port 8080 with the
   actuator on 8081 and turns on TLS to Data Grid. We do not own the Deployment in the target

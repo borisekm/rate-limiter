@@ -1,0 +1,11 @@
+# Test cluster only. Issues certificates from the lab CA (~/k8s-lab-build/infinispan-tls/ca.crt),
+# the same CA that signed Data Grid's certificate, so one --cacert trusts both. The CA's key is not
+# in this repository: it lives in the Secret lab-ca in the cert-manager namespace - see README.md.
+# Cluster-wide and shared, so not part of k8s/kustomization.yaml; apply it once per cluster.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: lab-ca
+spec:
+  ca:
+    secretName: lab-ca

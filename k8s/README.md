@@ -26,6 +26,8 @@ control. A local run or `docker compose up` is untouched and stays on 8051.
 | `deployment.yaml` | 2 replicas, no volume, actuator probes on 8081, credentials from a Secret |
 | `local-registry/` | lab-only image delivery, see below |
 | `push-image.sh` | build, push to every node's registry, pin the digest |
+| `certificate.yaml` | lab only: the app's HTTPS certificate, issued by cert-manager - **drop it on sa-t** |
+| `cert-manager/` | lab only: the `lab-ca` ClusterIssuer and how cert-manager is installed - see [its README](cert-manager/README.md) |
 
 On `sa-t` the chart owns the Deployment and Service, so what has to exist alongside it is the
 ConfigMap values and the credentials Secret.
@@ -131,7 +133,25 @@ kubectl apply -f k8s/namespace.yaml
 kubectl -n sa-t create secret generic rate-limiter-datagrid \
   --from-literal=INFINISPAN_USERNAME=user --from-literal=INFINISPAN_PASSWORD="$USER_PASS"
 kubectl -n sa-t create secret generic rate-limiter-datagrid-ca --from-file=ca.crt="$CA"
+# cert-manager and the lab-ca ClusterIssuer, which issue the app's HTTPS certificate - see below.
+# Once per cluster: cert-manager/README.md.
 ```
+
+### HTTPS only (lab)
+
+On the lab cluster the app speaks TLS only, on both ports: the patches set
+`SPRING_PROFILES_ACTIVE=https` (see the last document of `application.yml`), mount the Secret
+`rate-limiter-tls` at `/etc/rate-limiter-tls`, and switch the probes to `scheme: HTTPS`. There is no
+plain-HTTP listener - a request without TLS gets `400 This combination of host and port requires
+TLS` and never reaches the API. cert-manager issues that certificate (`certificate.yaml`) from the
+lab CA through the ClusterIssuer `lab-ca`, valid for the Service names and every node IP (the
+NodePort), and renews it 30 days before its 90 run out. The app reloads the files without a restart
+- within about a minute of the Secret changing, which is how long the kubelet takes to sync the
+volume. Status, forced renewal and the rest: [cert-manager/README.md](cert-manager/README.md). Clients trust the lab CA: `--cacert ~/k8s-lab-build/infinispan-tls/ca.crt`.
+
+On `sa-t` the profile stays off until the platform side is settled: the app would need a certificate
+mounted (e.g. an OpenShift service-serving certificate, which needs an annotation on the chart's
+Service) and the Route in front of it switched to `passthrough` or `reencrypt`.
 
 From the developer host, the same cluster is reachable on its LoadBalancer address with
 `SPRING_PROFILES_ACTIVE=k8s-lab` - see `src/main/resources/application-k8s-lab.yml`.
@@ -146,7 +166,7 @@ export KUBECONFIG=~/.kube/local-k8s-cluster.yaml
 kubectl apply -k k8s
 kubectl -n sa-t rollout status deployment/rate-limiter
 
-curl -s -X POST http://192.168.250.11:30852/v1/rate/check \
+curl -s --cacert ~/k8s-lab-build/infinispan-tls/ca.crt -X POST https://192.168.250.11:30852/v1/rate/check \
   -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
 ```
