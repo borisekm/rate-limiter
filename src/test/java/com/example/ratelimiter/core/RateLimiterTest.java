@@ -47,7 +47,8 @@ class RateLimiterTest {
             Resource.SUBJECT_SEARCH, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
             Resource.NEW_CASES, new ResourcePolicy(15, 6, Duration.ofMinutes(1)),
             Resource.MAX_CALLS_IP, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)),
-            Resource.MAX_CALLS_SESS, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)));
+            Resource.MAX_CALLS_SESS, new ResourcePolicy(100_000, 100_000, Duration.ofDays(1)),
+            Resource.GRUSTABFRAGE, new ResourcePolicy(10, 10, Duration.ofDays(1)));
 
     private final RateLimiterProperties props = new RateLimiterProperties(POLICIES);
     private MutableClock clock;

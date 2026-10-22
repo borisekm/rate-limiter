@@ -25,7 +25,9 @@ public enum Resource {
     MAX_CALLS_IP("maxCallsIp"),
 
     /** Calls into our own service, counted per session. */
-    MAX_CALLS_SESS("maxCallsSess");
+    MAX_CALLS_SESS("maxCallsSess"),
+
+    GRUSTABFRAGE("grustabfrage");
 
     private final String value;
 

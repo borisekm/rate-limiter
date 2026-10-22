@@ -85,6 +85,22 @@ class RateLimitApiTest {
     }
 
     @Test
+    void grustabfrageHasItsOwnQuotaOfTenAndIsRefusedAfterwards() throws Exception {
+        String identifier = UUID.randomUUID().toString();
+        check("grustabfrage", identifier)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limit").value(10))
+                .andExpect(jsonPath("$.remaining").value(9));
+        for (int i = 1; i < 10; i++) {
+            check("grustabfrage", identifier).andExpect(status().isOk());
+        }
+
+        check("grustabfrage", identifier).andExpect(status().isTooManyRequests());
+        // Another resource for the same identifier is untouched.
+        check("subjectSearch", identifier).andExpect(jsonPath("$.remaining").value(14));
+    }
+
+    @Test
     void retryAfterShrinksAsThePeriodElapses() throws Exception {
         String identifier = UUID.randomUUID().toString();
         long first = retryAfterOf(check("subjectSearch", identifier));

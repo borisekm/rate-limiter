@@ -50,7 +50,7 @@ components:
           maxLength: 512
         resource:
           type: string
-          enum: [subjectSearch, newCases, maxCallsIp, maxCallsSess]
+          enum: [subjectSearch, newCases, maxCallsIp, maxCallsSess, grustabfrage]
           minLength: 1
           maxLength: 512
 
