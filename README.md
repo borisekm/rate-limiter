@@ -189,7 +189,7 @@ a real client pointed at an address nothing listens on.
 
 What the fake cannot prove is compatibility with the actual Data Grid server - check that by running
 the app against one (`docker compose up -d infinispan`, or a port-forward to Data Grid). An in-JVM Hot
-Rod server is not an option: Infinispan 16's server modules are built for Java 25, this project for 21.
+Rod server is not an option: Infinispan 16's server modules are built for Java 25, this project, until now, for 21; it now builds on 25 and could use one.
 
 `mvn verify` fails below 95% line or branch coverage of the hand-written code (JaCoCo; report in
 `target/site/jacoco/index.html`).

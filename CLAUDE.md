@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-A distributed token-bucket rate limiter: Spring Boot 4 (Java 21), a remote Infinispan / Red Hat Data
+A distributed token-bucket rate limiter: Spring Boot 4 (Java 25), a remote Infinispan / Red Hat Data
 Grid server (Infinispan Spring Boot 4 remote starter, Hot Rod client 16) for the shared bucket state, API generated from an OpenAPI spec. See
 README.md for the user-facing description.
 
@@ -106,7 +106,7 @@ dependency; do not add it back. The buckets cache in tests is `InMemoryRemoteCac
 `RateLimitApiTest` swaps the starter's `RemoteCacheManager` for a `@MockitoBean` that hands it out.
 `HotRodTestClient` builds real clients only for addresses nothing listens on, for the fallback tests.
 Do not reach for an in-JVM `HotRodServer`: Infinispan 16's server modules are Java 25 class files and
-this project is on 21.
+this project is on 25.
 
 `InMemoryRemoteCache` is a dynamic proxy faking only what the limiter calls, with Hot Rod's semantics:
 a version per write, `replaceWithVersion` against it, `putIfAbsent` returning null unless

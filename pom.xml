@@ -18,7 +18,7 @@
     <description>Distributed token-bucket rate limiter backed by a remote Infinispan / Data Grid</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
         <infinispan.version>16.2.3</infinispan.version>
         <bucket4j.version>8.19.0</bucket4j.version>
         <openapi-generator.version>7.14.0</openapi-generator.version>

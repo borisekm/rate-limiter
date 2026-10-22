@@ -3,7 +3,7 @@
 # --- build ---------------------------------------------------------------
 # The API is generated from the OpenAPI spec at build time, so the build runs here
 # rather than expecting a jar to exist on the host.
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /build
 
 # Dependencies first: this layer is rebuilt only when the pom changes.
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -DskipTests package \
  && cp target/rate-limiter-*.jar /build/app.jar
 
 # --- runtime -------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 
 # Stateless: the buckets live on the Infinispan server, so the image needs no writable path.
@@ -32,6 +32,6 @@ EXPOSE 8051 8080 8081
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
-  CMD wget -qO- http://localhost:8051/actuator/health | grep -q '"status":"UP"' || exit 1
+  CMD wget -qO- http://localhost:8081/actuator/health | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

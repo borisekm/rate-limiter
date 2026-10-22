@@ -35,6 +35,8 @@ infinispan:
 # <resource>@<identifier>, e.g. subjectSearch@10.0.0.7 or maxCallsSess@org-42.
 # A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
 # Buckets are dropped once they would have refilled to capacity anyway (derived, not configured).
+# Every value can be set from the environment (RATELIMITER_RESOURCES_<RESOURCE>_<KEY>, no dashes);
+# the default after the colon is the local one. On Kubernetes they come from k8s/configmap.yaml.
 ratelimiter:
   # The answer while that server cannot be reached: allow (fail open) or deny (fail closed). The code
   # has no default; this is the local one, and each deployed environment sets its own in
@@ -47,24 +49,26 @@ ratelimiter:
   # ISPN004112 ("The SNI hostname is required when hostname validation is enabled").
   tls-hostname-validation: true
   resources:
-    subjectSearch:            # calls into the subject service
-      capacity: 15
-      refill-tokens: 6
-      refill-period: 60s
+    subjectSearch:
+      capacity: ${RATELIMITER_RESOURCES_SUBJECTSEARCH_CAPACITY:15}
+      refill-tokens: ${RATELIMITER_RESOURCES_SUBJECTSEARCH_REFILLTOKENS:6}
+      refill-period: ${RATELIMITER_RESOURCES_SUBJECTSEARCH_REFILLPERIOD:60s}
     newCases:
-      capacity: 10
-      refill-tokens: 10
-      refill-period: 24h
-    maxCallsIp:               # daily quota for our own service, per IP
-      capacity: 100000
-      refill-tokens: 100000
-      refill-period: 24h
-    maxCallsSess:             # daily quota for our own service, per session
-      capacity: 100000
-      refill-tokens: 100000
-      refill-period: 12h
+      capacity: ${RATELIMITER_RESOURCES_NEWCASES_CAPACITY:10}
+      refill-tokens: ${RATELIMITER_RESOURCES_NEWCASES_REFILLTOKENS:10}
+      refill-period: ${RATELIMITER_RESOURCES_NEWCASES_REFILLPERIOD:24h}
+    maxCallsIp:
+      capacity: ${RATELIMITER_RESOURCES_MAXCALLSIP_CAPACITY:100000}
+      refill-tokens: ${RATELIMITER_RESOURCES_MAXCALLSIP_REFILLTOKENS:100000}
+      refill-period: ${RATELIMITER_RESOURCES_MAXCALLSIP_REFILLPERIOD:24h}
+    maxCallsSess:
+      capacity: ${RATELIMITER_RESOURCES_MAXCALLSSESS_CAPACITY:100000}
+      refill-tokens: ${RATELIMITER_RESOURCES_MAXCALLSSESS_REFILLTOKENS:100000}
+      refill-period: ${RATELIMITER_RESOURCES_MAXCALLSSESS_REFILLPERIOD:12h}
 
 management:
+  server:
+    port: 8081
   endpoints:
     web:
       exposure:

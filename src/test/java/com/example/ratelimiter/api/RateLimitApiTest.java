@@ -36,6 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the real context.
  */
 @SpringBootTest(properties = {
+        // MockMvc serves one context; keep Actuator in that context for these tests.
+        "management.server.port=${server.port}",
         // On Kubernetes the Deployment passes the pod name here; anywhere else it is the hostname.
         "ratelimiter.instance-id=test-node-1"})
 @AutoConfigureMockMvc

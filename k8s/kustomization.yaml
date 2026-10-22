@@ -69,4 +69,4 @@ images:
   # rewrites this line with whatever it pushed.
   - name: rate-limiter
     newName: localhost:5000/rate-limiter
-    digest: sha256:8dd01dac90043980e214b1cfd5e217bac41ca0e773dd47026e821c9035ad70d2
+    digest: sha256:589f58ae4fcbf3f611c93aa79860352423c21283e313401eb3a7bac0a43695d8

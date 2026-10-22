@@ -23,6 +23,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * that taking readiness down with it.
  */
 @SpringBootTest(properties = {
+        // MockMvc serves one context; keep Actuator in that context for these tests.
+        "management.server.port=${server.port}",
         "ratelimiter.when-store-unavailable=allow",
         "infinispan.remote.connect-timeout=500",
         "management.endpoint.health.probes.enabled=true"})
