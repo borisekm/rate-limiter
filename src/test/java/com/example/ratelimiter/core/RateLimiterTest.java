@@ -8,6 +8,7 @@ import com.example.ratelimiter.config.HotRodConfig;
 import com.example.ratelimiter.config.RateLimiterProperties;
 import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
 import com.example.ratelimiter.config.RateLimiterProperties.WhenStoreUnavailable;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,7 @@ class RateLimiterTest {
     private MutableClock clock;
     private RateLimiter limiter;
     private InMemoryRemoteCache store;
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @BeforeEach
     void setUp() {
@@ -69,12 +71,63 @@ class RateLimiterTest {
     private RateLimiter newInstance(RateLimiterProperties properties) {
         RemoteCacheManager client = mock(RemoteCacheManager.class);
         doReturn(store.asRemoteCache()).when(client).getCache(HotRodConfig.BUCKETS_CACHE);
-        return new RateLimiter(client, properties, clock);
+        return new RateLimiter(client, properties, clock, registry);
     }
 
     /** The lifespan the store holds for a bucket, in seconds. */
     private long storedLifespanSeconds(String bucket) {
         return store.asRemoteCache().getWithMetadata(bucket).getLifespan();
+    }
+
+    private double decisions(String outcome) {
+        var counter = registry.find("ratelimiter.decisions")
+                .tag("resource", SUBJECT.getValue()).tag("outcome", outcome).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    void metricsCountDecisionsByOutcome() {
+        for (int i = 0; i < 17; i++) limiter.check(SUBJECT, "ip");   // 15 allowed, then 2 denied
+
+        assertThat(decisions("allowed")).isEqualTo(15);
+        assertThat(decisions("denied")).isEqualTo(2);
+        assertThat(registry.get("ratelimiter.remaining.tokens").tag("resource", SUBJECT.getValue())
+                .summary().count()).isEqualTo(17);
+        assertThat(registry.get("ratelimiter.check.duration").tag("resource", SUBJECT.getValue())
+                .timer().count()).isEqualTo(17);
+        assertThat(registry.get("ratelimiter.store.errors").counter().count()).isZero();
+    }
+
+    @Test
+    void metricsCountDegradedAnswersAndStoreErrors() {
+        store.goDown();
+        limiter.check(SUBJECT, "ip");
+        limiter.check(SUBJECT, "ip");
+
+        assertThat(decisions(props.whenStoreUnavailable() == WhenStoreUnavailable.ALLOW
+                ? "degraded_allowed" : "degraded_denied")).isEqualTo(2);
+        assertThat(decisions("allowed")).isZero();
+        assertThat(registry.get("ratelimiter.store.errors").counter().count()).isEqualTo(2);
+        assertThat(registry.get("ratelimiter.remaining.tokens").tag("resource", SUBJECT.getValue())
+                .summary().count()).isZero();
+    }
+
+    @Test
+    void metricsCountLostWriteRaces() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> done = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            done.add(pool.submit(() -> {
+                start.await();
+                return limiter.check(SUBJECT, "hot").allowed();
+            }));
+        }
+        start.countDown();
+        for (Future<?> f : done) f.get(10, TimeUnit.SECONDS);
+        pool.shutdownNow();
+
+        assertThat(registry.get("ratelimiter.cas.retries").counter().count()).isPositive();
     }
 
     @Test
@@ -300,7 +353,7 @@ class RateLimiterTest {
     @Test
     void aServerWithoutTheCacheIsAnOutage() {
         RemoteCacheManager client = mock(RemoteCacheManager.class);   // getCache answers null
-        RateLimiter cut = new RateLimiter(client, props, clock);
+        RateLimiter cut = new RateLimiter(client, props, clock, registry);
 
         assertThat(cut.check(SUBJECT, "ip").degraded()).isTrue();
     }
@@ -309,7 +362,7 @@ class RateLimiterTest {
     @Test
     void unreachableServerFailsClosedWhenConfiguredTo() {
         try (RemoteCacheManager dead = HotRodTestClient.client(HotRodTestClient.deadAddress())) {
-            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.DENY), clock);
+            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.DENY), clock, registry);
 
             Decision decision = cut.check(SUBJECT, "ip");
             assertThat(decision.degraded()).isTrue();
@@ -320,7 +373,7 @@ class RateLimiterTest {
     @Test
     void unreachableServerFailsOpenWhenConfiguredTo() {
         try (RemoteCacheManager dead = HotRodTestClient.client(HotRodTestClient.deadAddress())) {
-            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.ALLOW), clock);
+            RateLimiter cut = new RateLimiter(dead, new RateLimiterProperties(POLICIES, WhenStoreUnavailable.ALLOW), clock, registry);
 
             Decision decision = cut.check(SUBJECT, "ip");
             assertThat(decision.degraded()).isTrue();

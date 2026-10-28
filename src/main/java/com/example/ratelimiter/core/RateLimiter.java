@@ -12,6 +12,10 @@ import io.github.bucket4j.VerboseResult;
 import io.github.bucket4j.distributed.BucketProxy;
 import io.github.bucket4j.distributed.proxy.ClientSideConfig;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.infinispan.client.hotrod.RemoteCache;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.exceptions.HotRodClientException;
@@ -54,21 +58,76 @@ public class RateLimiter {
     private final Map<Resource, BucketConfiguration> configurations = new EnumMap<>(Resource.class);
     private final Clock clock;
 
+    private final Map<Resource, Meters> meters = new EnumMap<>(Resource.class);
+    private final Counter storeErrors;
+
     private final AtomicBoolean storeDown = new AtomicBoolean();
     private final AtomicLong lastOutageLog = new AtomicLong();
     private final AtomicLong degradedSinceLastLog = new AtomicLong();
 
     @Autowired
-    public RateLimiter(RemoteCacheManager cacheManager, RateLimiterProperties props, Clock clock) {
-        this(new LazyCache(cacheManager), props, clock);
+    public RateLimiter(RemoteCacheManager cacheManager, RateLimiterProperties props, Clock clock,
+                       MeterRegistry registry) {
+        this(new LazyCache(cacheManager), props, clock, registry);
     }
 
-    RateLimiter(Supplier<RemoteCache<String, byte[]>> buckets, RateLimiterProperties props, Clock clock) {
+    RateLimiter(Supplier<RemoteCache<String, byte[]>> buckets, RateLimiterProperties props, Clock clock,
+                MeterRegistry registry) {
         this.props = props;
         this.clock = clock;
+        // Instruments are tagged by resource only, never by identifier: identifiers are open-ended
+        // (client IPs, sessions) and would make the series count unbounded.
+        props.resources().forEach((resource, policy) -> {
+            configurations.put(resource, bucketConfiguration(policy));
+            meters.put(resource, new Meters(registry, resource));
+        });
+        this.storeErrors = Counter.builder("ratelimiter.store.errors")
+                .description("Checks that could not reach the bucket store and were answered by the fallback")
+                .register(registry);
+        Counter lostRaces = Counter.builder("ratelimiter.cas.retries")
+                .description("Versioned bucket writes that lost to a concurrent writer and were retried")
+                .register(registry);
         this.proxyManager = new HotRodProxyManager(buckets, props.bucketLifespan(),
-                ClientSideConfig.getDefault().withClientClock(wallClock()));
-        props.resources().forEach((resource, policy) -> configurations.put(resource, bucketConfiguration(policy)));
+                ClientSideConfig.getDefault().withClientClock(wallClock()), lostRaces::increment);
+    }
+
+    /** The instruments of one resource, registered up front so every series exists at zero from startup. */
+    private static final class Meters {
+        private final Counter allowed;
+        private final Counter denied;
+        private final Counter degradedAllowed;
+        private final Counter degradedDenied;
+        private final DistributionSummary remaining;
+        private final Timer duration;
+
+        Meters(MeterRegistry registry, Resource resource) {
+            allowed = decisions(registry, resource, "allowed");
+            denied = decisions(registry, resource, "denied");
+            degradedAllowed = decisions(registry, resource, "degraded_allowed");
+            degradedDenied = decisions(registry, resource, "degraded_denied");
+            remaining = DistributionSummary.builder("ratelimiter.remaining.tokens")
+                    .description("Tokens left in the bucket after a check answered by the store")
+                    .baseUnit("tokens").tag("resource", resource.getValue()).register(registry);
+            duration = Timer.builder("ratelimiter.check.duration")
+                    .description("Time to decide a check, including the store round trips")
+                    .publishPercentileHistogram().tag("resource", resource.getValue()).register(registry);
+        }
+
+        private static Counter decisions(MeterRegistry registry, Resource resource, String outcome) {
+            return Counter.builder("ratelimiter.decisions")
+                    .description("Rate-limit decisions by outcome; degraded_* were answered without the store")
+                    .tag("resource", resource.getValue()).tag("outcome", outcome).register(registry);
+        }
+
+        void record(Decision decision, long nanos) {
+            duration.record(nanos, TimeUnit.NANOSECONDS);
+            if (decision.degraded()) {
+                (decision.allowed() ? degradedAllowed : degradedDenied).increment();
+            } else {
+                (decision.allowed() ? allowed : denied).increment();
+                remaining.record(decision.remaining());
+            }
+        }
     }
 
     /**
@@ -140,6 +199,13 @@ public class RateLimiter {
     }
 
     public Decision check(Resource resource, String identifier, long tokens) {
+        long started = System.nanoTime();
+        Decision decision = decide(resource, identifier, tokens);
+        meters.get(resource).record(decision, System.nanoTime() - started);
+        return decision;
+    }
+
+    private Decision decide(Resource resource, String identifier, long tokens) {
         ResourcePolicy policy = props.policyFor(resource);
         BucketProxy bucket = proxyManager.builder()
                 .build(bucketName(resource, identifier), configurations.get(resource));
@@ -173,6 +239,7 @@ public class RateLimiter {
     }
 
     private Decision storeUnavailable(ResourcePolicy policy, HotRodClientException cause) {
+        storeErrors.increment();
         boolean allow = props.whenStoreUnavailable() == WhenStoreUnavailable.ALLOW;
         long degraded = degradedSinceLastLog.incrementAndGet();
         long now = clock.millis();

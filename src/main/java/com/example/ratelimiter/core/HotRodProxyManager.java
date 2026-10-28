@@ -30,6 +30,7 @@ final class HotRodProxyManager extends AbstractCompareAndSwapBasedProxyManager<S
 
     private final Supplier<RemoteCache<String, byte[]>> buckets;
     private final long lifespanMillis;
+    private final Runnable onLostRace;
 
     /**
      * @param buckets  the cache, resolved per request so an instance started while the server was
@@ -37,9 +38,16 @@ final class HotRodProxyManager extends AbstractCompareAndSwapBasedProxyManager<S
      * @param lifespan applied on every write; see {@code RateLimiterProperties.bucketLifespan()}
      */
     HotRodProxyManager(Supplier<RemoteCache<String, byte[]>> buckets, Duration lifespan, ClientSideConfig config) {
+        this(buckets, lifespan, config, () -> { });
+    }
+
+    /** @param onLostRace called each time a versioned write loses to a concurrent writer (Bucket4j then retries) */
+    HotRodProxyManager(Supplier<RemoteCache<String, byte[]>> buckets, Duration lifespan, ClientSideConfig config,
+                       Runnable onLostRace) {
         super(config);
         this.buckets = buckets;
         this.lifespanMillis = lifespan.toMillis();
+        this.onLostRace = onLostRace;
     }
 
     @Override
@@ -62,13 +70,19 @@ final class HotRodProxyManager extends AbstractCompareAndSwapBasedProxyManager<S
             @Override
             public boolean compareAndSwap(byte[] originalData, byte[] newData, RemoteBucketState newState,
                                           Optional<Long> timeoutNanos) {
+                boolean swapped;
                 if (originalData == null) {
                     // Without FORCE_RETURN_VALUE Hot Rod answers null whether or not the put happened.
-                    return cache.withFlags(Flag.FORCE_RETURN_VALUE)
+                    swapped = cache.withFlags(Flag.FORCE_RETURN_VALUE)
                             .putIfAbsent(key, newData, lifespanMillis, TimeUnit.MILLISECONDS) == null;
+                } else {
+                    swapped = cache.replaceWithVersion(key, newData, version,
+                            lifespanMillis, TimeUnit.MILLISECONDS, 0, TimeUnit.MILLISECONDS);
                 }
-                return cache.replaceWithVersion(key, newData, version,
-                        lifespanMillis, TimeUnit.MILLISECONDS, 0, TimeUnit.MILLISECONDS);
+                if (!swapped) {
+                    onLostRace.run();
+                }
+                return swapped;
             }
         };
     }

@@ -50,6 +50,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+        <!-- The registry behind /actuator/prometheus; without it the endpoint is exposed but absent. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
 
         <!-- The RemoteCacheManager, configured from infinispan.remote.* in application.yml. Brings the
              Hot Rod client 16, which negotiates the protocol, so it talks to older servers (Data Grid
