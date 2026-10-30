@@ -5,6 +5,9 @@ import com.example.ratelimiter.api.model.CheckRateResponse;
 import com.example.ratelimiter.core.Decision;
 import com.example.ratelimiter.core.RateLimiter;
 import com.example.ratelimiter.core.Resource;
+import org.infinispan.client.hotrod.exceptions.HotRodClientException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +22,8 @@ import java.net.UnknownHostException;
  */
 @Component
 public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
+
+    private static final Logger log = LoggerFactory.getLogger(RateLimitApiDelegateImpl.class);
 
     /**
      * Which node answered. A header rather than a response field: the response schema belongs to
@@ -66,6 +71,19 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
             response.header(DEGRADED_HEADER, "store-unavailable");
         }
         return response.body(body);
+    }
+
+    @Override
+    public ResponseEntity<Void> resetRate(CheckRateRequest request) {
+        Resource resource = Resource.fromValue(request.getResource().getValue());
+        try {
+            rateLimiter.reset(resource, request.getIdentifier());
+        } catch (HotRodClientException e) {
+            log.warn("Reset of {}@{} failed, bucket store unavailable: {}",
+                    resource.getValue(), request.getIdentifier(), e.toString());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header(SERVED_BY_HEADER, instanceId).build();
+        }
+        return ResponseEntity.noContent().header(SERVED_BY_HEADER, instanceId).build();
     }
 
     private static String localHostName() {

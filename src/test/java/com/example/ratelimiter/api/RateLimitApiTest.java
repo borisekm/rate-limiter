@@ -73,6 +73,40 @@ class RateLimitApiTest {
         return JsonPath.parse(json).read("$.retryAfterMillis", Long.class);
     }
 
+    private ResultActions reset(String resource, String identifier) throws Exception {
+        return mockMvc.perform(post("/v1/rate/reset")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"resource\":\"" + resource + "\",\"identifier\":\"" + identifier + "\"}"));
+    }
+
+    @Test
+    void resetGivesBackTheFullLimitAnswersNoContentAndNamesTheNode() throws Exception {
+        String identifier = UUID.randomUUID().toString();
+        for (int i = 0; i < 15; i++) {
+            check("subjectSearch", identifier).andExpect(status().isOk());
+        }
+        check("subjectSearch", identifier).andExpect(status().isTooManyRequests());
+
+        reset("subjectSearch", identifier)
+                .andExpect(status().isNoContent())
+                .andExpect(header().string("X-Served-By", "test-node-1"));
+
+        check("subjectSearch", identifier)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.remaining").value(14));
+    }
+
+    @Test
+    void resetOfAnUnknownKeyIsStillNoContent() throws Exception {
+        reset("subjectSearch", UUID.randomUUID().toString()).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void resetRejectsAnInvalidRequest() throws Exception {
+        reset("nope", "x").andExpect(status().isBadRequest());
+        reset("subjectSearch", "").andExpect(status().isBadRequest());
+    }
+
     @Test
     void allowedCallReportsTimeToTheNextRefillRatherThanZero() throws Exception {
         ResultActions result = check("subjectSearch", UUID.randomUUID().toString())

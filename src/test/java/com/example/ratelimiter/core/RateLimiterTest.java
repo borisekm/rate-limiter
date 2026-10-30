@@ -10,6 +10,7 @@ import com.example.ratelimiter.config.RateLimiterProperties.ResourcePolicy;
 import com.example.ratelimiter.config.RateLimiterProperties.WhenStoreUnavailable;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.infinispan.client.hotrod.exceptions.HotRodClientException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -83,6 +84,62 @@ class RateLimiterTest {
         var counter = registry.find("ratelimiter.decisions")
                 .tag("resource", SUBJECT.getValue()).tag("outcome", outcome).counter();
         return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    void resetRestoresTheFullLimit() {
+        for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
+        assertThat(limiter.check(SUBJECT, "ip").allowed()).isFalse();
+
+        limiter.reset(SUBJECT, "ip");
+
+        Decision decision = limiter.check(SUBJECT, "ip");
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.remaining()).isEqualTo(14);
+    }
+
+    @Test
+    void resetOfAnUnknownBucketIsANoOp() {
+        limiter.reset(SUBJECT, "never-seen");
+        limiter.reset(SUBJECT, "never-seen");
+
+        assertThat(limiter.check(SUBJECT, "never-seen").remaining()).isEqualTo(14);
+    }
+
+    @Test
+    void resetTouchesOnlyItsOwnResourceAndIdentifier() {
+        for (int i = 0; i < 15; i++) {
+            limiter.check(SUBJECT, "ip");
+            limiter.check(SUBJECT, "other");
+        }
+        limiter.check(DAILY, "ip");
+
+        limiter.reset(SUBJECT, "ip");
+
+        assertThat(limiter.check(SUBJECT, "ip").allowed()).isTrue();
+        assertThat(limiter.check(SUBJECT, "other").allowed()).isFalse();
+        assertThat(limiter.check(DAILY, "ip").remaining()).isEqualTo(99_998);
+    }
+
+    @Test
+    void resetIsSeenByEveryInstance() {
+        RateLimiter other = newInstance(props);
+        for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
+
+        other.reset(SUBJECT, "ip");
+
+        assertThat(limiter.check(SUBJECT, "ip").allowed()).isTrue();
+    }
+
+    @Test
+    void resetDuringAnOutageFailsInsteadOfFallingBack() {
+        store.goDown();
+
+        assertThatThrownBy(() -> limiter.reset(SUBJECT, "ip")).isInstanceOf(HotRodClientException.class);
+        assertThat(registry.get("ratelimiter.store.errors").counter().count()).isEqualTo(1);
+
+        store.comeBack();
+        limiter.reset(SUBJECT, "ip");   // and works again once the store is back
     }
 
     @Test

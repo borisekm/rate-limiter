@@ -38,6 +38,28 @@ paths:
         '400':
           description: Invalid request
 
+  /v1/rate/reset:
+    post:
+      tags: [RateLimit]
+      operationId: resetRate
+      summary: Reset the bucket for a key, restoring its full limit
+      description: >
+        Deletes the bucket for the given resource and identifier. The next check starts from a
+        full bucket. Idempotent: resetting a key that has no bucket also returns 204.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRateRequest'
+      responses:
+        '204':
+          description: Bucket was reset (or did not exist)
+        '400':
+          description: Invalid request
+        '503':
+          description: Bucket store unreachable; nothing was reset
+
 components:
   schemas:
     CheckRateRequest:

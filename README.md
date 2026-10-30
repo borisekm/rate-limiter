@@ -15,6 +15,14 @@ curl -s -X POST localhost:8051/v1/rate/check \
 # -> 429 {"allowed":false,"limit":15,"remaining":0,"retryAfterMillis":53413}   + Retry-After header
 ```
 
+```bash
+curl -s -X POST localhost:8051/v1/rate/reset \
+  -H 'Content-Type: application/json' \
+  -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
+# -> 204 (also when the key had no bucket); the next check starts from a full bucket
+# -> 503 when the bucket store is unreachable: nothing was reset, and there is no fail-open/closed fallback
+```
+
 ## Buckets
 
 A bucket is identified by **`<resource>@<identifier>`**, e.g. `subjectSearch@10.0.0.7`.

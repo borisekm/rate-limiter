@@ -205,6 +205,22 @@ public class RateLimiter {
         return decision;
     }
 
+    /**
+     * Deletes the bucket, so the next check starts from a full one. Idempotent. Unlike a check there
+     * is no fallback: a reset that did not happen must not look like one that did, so an unreachable
+     * store surfaces as the {@link HotRodClientException}. A plain remove is right here - the point is
+     * to discard whatever state the bucket holds, not to update it.
+     */
+    public void reset(Resource resource, String identifier) {
+        try {
+            proxyManager.removeProxy(bucketName(resource, identifier));
+        } catch (HotRodClientException e) {
+            storeErrors.increment();
+            throw e;
+        }
+        storeReachable();
+    }
+
     private Decision decide(Resource resource, String identifier, long tokens) {
         ResourcePolicy policy = props.policyFor(resource);
         BucketProxy bucket = proxyManager.builder()
