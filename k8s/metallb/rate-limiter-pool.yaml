@@ -1,0 +1,22 @@
+# Test-cluster only - drop on sa-t. One address for the rate-limiter's LoadBalancer Service, shaped
+# like the Data Grid one (a /32 pool that is never auto-assigned; the Service asks for it by name).
+# Apply by hand, it lives in another namespace than the kustomization:
+#   kubectl apply -f k8s/metallb/rate-limiter-pool.yaml
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: rate-limiter-ip
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.250.241/32
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: rate-limiter-ip
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - rate-limiter-ip

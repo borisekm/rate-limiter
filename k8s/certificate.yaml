@@ -38,9 +38,14 @@ spec:
     - rate-limiter-nodeport.sa-t
     - rate-limiter-nodeport.sa-t.svc
     - rate-limiter-nodeport.sa-t.svc.cluster.local
+    - rate-limiter-lb
+    - rate-limiter-lb.sa-t
+    - rate-limiter-lb.sa-t.svc
+    - rate-limiter-lb.sa-t.svc.cluster.local
   ipAddresses:
     - 127.0.0.1
     - 192.168.250.10   # control-1
     - 192.168.250.11   # worker-1
     - 192.168.250.12   # worker-2
     - 192.168.250.13   # worker-3
+    - 192.168.250.241  # MetalLB, rate-limiter-lb

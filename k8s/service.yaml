@@ -59,3 +59,24 @@ spec:
       port: 8080
       targetPort: 8080
       nodePort: 30852
+---
+# Test-cluster only - drop on sa-t. A stable address from MetalLB (pool in metallb/):
+# https://192.168.250.241:8080/v1/rate/check  (HTTPS only - see README.md)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiter-lb
+  labels:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+  annotations:
+    metallb.io/address-pool: rate-limiter-ip
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: rate-limiter
+    app.kubernetes.io/instance: rate-limiter
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

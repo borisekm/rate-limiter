@@ -163,10 +163,12 @@ and the error blames the manifest rather than the connection:
 
 ```bash
 export KUBECONFIG=~/.kube/local-k8s-cluster.yaml
+kubectl apply -f k8s/metallb/rate-limiter-pool.yaml   # once: the MetalLB address for the LoadBalancer Service
 kubectl apply -k k8s
 kubectl -n sa-t rollout status deployment/rate-limiter
 
-curl -s --cacert ~/k8s-lab-build/infinispan-tls/ca.crt -X POST https://192.168.250.11:30852/v1/rate/check \
+# via MetalLB (stable address) - or any node IP on the NodePort: https://192.168.250.11:30852
+curl -s --cacert ~/k8s-lab-build/infinispan-tls/ca.crt -X POST https://192.168.250.241:8080/v1/rate/check \
   -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
 ```
