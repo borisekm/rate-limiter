@@ -86,6 +86,28 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
         return ResponseEntity.noContent().header(SERVED_BY_HEADER, instanceId).build();
     }
 
+    @Override
+    public ResponseEntity<Void> resetResourceRate(String resource) {
+        Resource parsed;
+        try {
+            parsed = Resource.fromValue(resource);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().header(SERVED_BY_HEADER, instanceId).build();
+        }
+        // Only accept the exact wire values declared by the contract.
+        if (!parsed.getValue().equals(resource)) {
+            return ResponseEntity.badRequest().header(SERVED_BY_HEADER, instanceId).build();
+        }
+        try {
+            rateLimiter.resetResource(parsed);
+        } catch (HotRodClientException e) {
+            log.warn("Reset of resource {} failed; buckets may have been partially deleted: {}",
+                    resource, e.toString());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header(SERVED_BY_HEADER, instanceId).build();
+        }
+        return ResponseEntity.noContent().header(SERVED_BY_HEADER, instanceId).build();
+    }
+
     private static String localHostName() {
         try {
             return InetAddress.getLocalHost().getHostName();

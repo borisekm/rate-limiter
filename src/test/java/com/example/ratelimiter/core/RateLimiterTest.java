@@ -143,6 +143,37 @@ class RateLimiterTest {
     }
 
     @Test
+    void resourceResetRecreatesAllIdentifiersWithTheUpdatedPolicyAcrossInstances() {
+        limiter.check(SUBJECT, "a", 15);
+        limiter.check(SUBJECT, "b@nested", 15);
+        limiter.check(DAILY, "a");
+        var policies = new java.util.EnumMap<>(POLICIES);
+        policies.put(SUBJECT, new ResourcePolicy(20, 20, Duration.ofSeconds(5)));
+        RateLimiter updated = newInstance(new RateLimiterProperties(policies));
+        assertThat(updated.check(SUBJECT, "a").allowed()).isFalse();
+
+        updated.resetResource(SUBJECT);
+        updated.resetResource(SUBJECT); // absent buckets are harmless
+
+        for (String identifier : List.of("a", "b@nested")) {
+            Decision decision = updated.check(SUBJECT, identifier, 20);
+            assertThat(decision.allowed()).isTrue();
+            assertThat(decision.remaining()).isZero();
+            assertThat(updated.check(SUBJECT, identifier).retryAfterMillis()).isEqualTo(5_000);
+        }
+        assertThat(updated.check(DAILY, "a").remaining()).isEqualTo(99_998);
+    }
+
+    @Test
+    void resourceResetDuringAnOutageFailsAndCountsTheError() {
+        store.goDown();
+        assertThatThrownBy(() -> limiter.resetResource(SUBJECT)).isInstanceOf(HotRodClientException.class);
+        assertThat(registry.get("ratelimiter.store.errors").counter().count()).isEqualTo(1);
+        store.comeBack();
+        limiter.resetResource(SUBJECT);
+    }
+
+    @Test
     void metricsCountDecisionsByOutcome() {
         for (int i = 0; i < 17; i++) limiter.check(SUBJECT, "ip");   // 15 allowed, then 2 denied
 

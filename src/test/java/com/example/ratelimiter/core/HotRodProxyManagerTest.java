@@ -30,6 +30,46 @@ class HotRodProxyManagerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void resourceRemovalUsesTheDelimiterAndClosesTheIterator() {
+        RemoteCache<String, byte[]> remote = org.mockito.Mockito.mock(RemoteCache.class);
+        var keys = org.mockito.Mockito.mock(org.infinispan.commons.util.CloseableIteratorSet.class);
+        var iterator = org.mockito.Mockito.mock(org.infinispan.commons.util.CloseableIterator.class);
+        org.mockito.Mockito.when(remote.keySet()).thenReturn(keys);
+        org.mockito.Mockito.when(keys.iterator()).thenReturn(iterator);
+        org.mockito.Mockito.when(iterator.hasNext()).thenReturn(true, true, true, false);
+        org.mockito.Mockito.when(iterator.next()).thenReturn(
+                "subjectSearch@a", "subjectSearchExtra@b", "newCases@subjectSearch@a");
+        var proxy = new HotRodProxyManager(() -> remote, Duration.ofMinutes(1), ClientSideConfig.getDefault());
+
+        proxy.removeResource(Resource.SUBJECT_SEARCH);
+
+        org.mockito.Mockito.verify(remote).remove("subjectSearch@a");
+        org.mockito.Mockito.verify(remote, org.mockito.Mockito.never()).remove("subjectSearchExtra@b");
+        org.mockito.Mockito.verify(remote, org.mockito.Mockito.never()).remove("newCases@subjectSearch@a");
+        org.mockito.Mockito.verify(iterator).close();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void resourceRemovalClosesTheIteratorWhenDeletionFails() {
+        RemoteCache<String, byte[]> remote = org.mockito.Mockito.mock(RemoteCache.class);
+        var keys = org.mockito.Mockito.mock(org.infinispan.commons.util.CloseableIteratorSet.class);
+        var iterator = org.mockito.Mockito.mock(org.infinispan.commons.util.CloseableIterator.class);
+        org.mockito.Mockito.when(remote.keySet()).thenReturn(keys);
+        org.mockito.Mockito.when(keys.iterator()).thenReturn(iterator);
+        org.mockito.Mockito.when(iterator.hasNext()).thenReturn(true);
+        org.mockito.Mockito.when(iterator.next()).thenReturn("subjectSearch@a");
+        org.mockito.Mockito.when(remote.remove("subjectSearch@a"))
+                .thenThrow(new org.infinispan.client.hotrod.exceptions.HotRodClientException("down"));
+        var proxy = new HotRodProxyManager(() -> remote, Duration.ofMinutes(1), ClientSideConfig.getDefault());
+
+        assertThatThrownBy(() -> proxy.removeResource(Resource.SUBJECT_SEARCH))
+                .isInstanceOf(org.infinispan.client.hotrod.exceptions.HotRodClientException.class);
+        org.mockito.Mockito.verify(iterator).close();
+    }
+
+    @Test
     void aLostRaceIsReportedNotOverwritten() {
         var first = manager.beginCompareAndSwapOperation("b");
         var second = manager.beginCompareAndSwapOperation("b");

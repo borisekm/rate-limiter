@@ -102,6 +102,20 @@ final class HotRodProxyManager extends AbstractCompareAndSwapBasedProxyManager<S
         buckets.get().remove(key);
     }
 
+    /** Streams keys without loading the cache into memory; deletion is not atomic with checks. */
+    void removeResource(Resource resource) {
+        RemoteCache<String, byte[]> cache = buckets.get();
+        String prefix = resource.getValue() + "@";
+        try (var keys = cache.keySet().iterator()) {
+            while (keys.hasNext()) {
+                String key = keys.next();
+                if (key.startsWith(prefix)) {
+                    cache.remove(key);
+                }
+            }
+        }
+    }
+
     @Override
     protected CompletableFuture<Void> removeAsync(String key) {
         throw new UnsupportedOperationException("RateLimiter checks synchronously");

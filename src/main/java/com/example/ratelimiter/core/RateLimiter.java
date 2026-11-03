@@ -11,7 +11,6 @@ import io.github.bucket4j.TimeMeter;
 import io.github.bucket4j.VerboseResult;
 import io.github.bucket4j.distributed.BucketProxy;
 import io.github.bucket4j.distributed.proxy.ClientSideConfig;
-import io.github.bucket4j.distributed.proxy.ProxyManager;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -53,7 +52,7 @@ public class RateLimiter {
     /** What a refusal during an outage tells the caller to wait - the store may be back any moment. */
     static final long UNAVAILABLE_RETRY_AFTER_MILLIS = 1_000;
 
-    private final ProxyManager<String> proxyManager;
+    private final HotRodProxyManager proxyManager;
     private final RateLimiterProperties props;
     private final Map<Resource, BucketConfiguration> configurations = new EnumMap<>(Resource.class);
     private final Clock clock;
@@ -214,6 +213,17 @@ public class RateLimiter {
     public void reset(Resource resource, String identifier) {
         try {
             proxyManager.removeProxy(bucketName(resource, identifier));
+        } catch (HotRodClientException e) {
+            storeErrors.increment();
+            throw e;
+        }
+        storeReachable();
+    }
+
+    /** Deletes all identifiers for a resource. A store failure can leave a partial reset. */
+    public void resetResource(Resource resource) {
+        try {
+            proxyManager.removeResource(resource);
         } catch (HotRodClientException e) {
             storeErrors.increment();
             throw e;

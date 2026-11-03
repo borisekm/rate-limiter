@@ -60,6 +60,32 @@ paths:
         '503':
           description: Bucket store unreachable; nothing was reset
 
+  /v1/rate/resources/{resource}/reset:
+    post:
+      tags: [RateLimit]
+      operationId: resetResourceRate
+      summary: Delete all buckets for a resource
+      description: >
+        Scans the shared cache and deletes buckets for this resource only. The next check
+        for each identifier starts full using the serving instance's loaded policy.
+        This operation is not atomic with concurrent checks. For parameter updates, pause
+        checks and drain in-flight requests, load the new policy on all instances, reset,
+        then resume checks. Retrying is safe but also resets buckets created since the previous call.
+      parameters:
+        - name: resource
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [subjectSearch, newCases, maxCallsIp, maxCallsSess, grustabfrage]
+      responses:
+        '204':
+          description: Resource scan and deletion completed (including no matching buckets)
+        '400':
+          description: Invalid resource
+        '503':
+          description: Bucket store failure; some buckets may already have been deleted
+
 components:
   schemas:
     CheckRateRequest:

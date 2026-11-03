@@ -224,3 +224,18 @@ Data Grid in the same namespace as the store. See [k8s/README.md](k8s/README.md)
 Locally the app stays on 8051 without TLS; the Kubernetes settings (ports, TLS to Data Grid with the
 service CA) apply only when Spring detects the platform, which it does from the
 `KUBERNETES_SERVICE_HOST` every pod gets.
+
+### Reset all buckets for a resource
+
+```sh
+curl -i -X POST localhost:8051/v1/rate/resources/subjectSearch/reset
+```
+
+Returns 204 after scanning the shared cache and deleting matching buckets, including when none
+exist. Other resources are unaffected. A store failure returns 503; deletion may be partial and
+can be retried. The scan streams keys and removes matches individually, so work grows with cache size.
+
+For policy updates, pause checks for the resource and drain in-flight requests, deploy the updated
+parameters to every serving instance, call this endpoint, then resume checks. Configuration is loaded
+at startup. Deletion is not atomic with checks: concurrent traffic can recreate buckets, and instances
+with an old policy can recreate them with old parameters. Reset grants a fresh full quota.

@@ -65,6 +65,13 @@ class StoreUnavailableApiTest {
     }
 
     @Test
+    void resourceResetFailsWith503() throws Exception {
+        mockMvc.perform(post("/v1/rate/resources/subjectSearch/reset"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().exists("X-Served-By"));
+    }
+
+    @Test
     void healthReportsTheStoreDownButReadinessStaysUp() throws Exception {
         mockMvc.perform(get("/actuator/health/bucketStore"))
                 .andExpect(status().isServiceUnavailable())

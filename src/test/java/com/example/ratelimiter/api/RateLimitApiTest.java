@@ -108,6 +108,31 @@ class RateLimitApiTest {
     }
 
     @Test
+    void resourceResetRestoresAllIdentifiersAndLeavesOtherResourcesAlone() throws Exception {
+        String first = UUID.randomUUID().toString();
+        String second = UUID.randomUUID().toString();
+        check("subjectSearch", first);
+        check("subjectSearch", second);
+        check("newCases", first);
+        for (int i = 0; i < 2; i++) {
+            mockMvc.perform(post("/v1/rate/resources/subjectSearch/reset"))
+                    .andExpect(status().isNoContent())
+                    .andExpect(header().string("X-Served-By", "test-node-1"));
+        }
+        check("subjectSearch", first).andExpect(jsonPath("$.remaining").value(14));
+        check("subjectSearch", second).andExpect(jsonPath("$.remaining").value(14));
+        check("newCases", first).andExpect(jsonPath("$.remaining").value(8));
+    }
+
+    @Test
+    void resourceResetRejectsInvalidResources() throws Exception {
+        for (String resource : new String[]{"nope", "SUBJECT_SEARCH", "subject-search"}) {
+            mockMvc.perform(post("/v1/rate/resources/{resource}/reset", resource))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
     void allowedCallReportsTimeToTheNextRefillRatherThanZero() throws Exception {
         ResultActions result = check("subjectSearch", UUID.randomUUID().toString())
                 .andExpect(status().isOk())

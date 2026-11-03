@@ -108,6 +108,18 @@ public final class InMemoryRemoteCache {
                 Entry removed = entries.remove((String) args[0]);
                 yield removed == null || removed.expiredAt(clock.millis()) ? null : removed.value();
             }
+            case "keySet/0" -> {
+                var keys = org.mockito.Mockito.mock(org.infinispan.commons.util.CloseableIteratorSet.class);
+                org.mockito.Mockito.when(keys.iterator()).thenAnswer(ignored -> {
+                    var iterator = entries.keySet().stream().filter(key -> live(key) != null).iterator();
+                    return new org.infinispan.commons.util.CloseableIterator<String>() {
+                        public boolean hasNext() { return iterator.hasNext(); }
+                        public String next() { return iterator.next(); }
+                        public void close() { }
+                    };
+                });
+                yield keys;
+            }
             case "clear/0" -> {
                 entries.clear();
                 yield null;
