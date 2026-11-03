@@ -11,8 +11,8 @@ INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn spring-boot:run
 curl -s -X POST localhost:8051/v1/rate/check \
   -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
-# -> 200 {"allowed":true,"limit":15,"remaining":14,"retryAfterMillis":60000}
-# -> 429 {"allowed":false,"limit":15,"remaining":0,"retryAfterMillis":53413}   + Retry-After header
+# -> 200 {"allowed":true,"limit":15,"remaining":14,"retryAfterMillis":10000}
+# -> 429 {"allowed":false,"limit":15,"remaining":0,"retryAfterMillis":3413}   + Retry-After header
 ```
 
 ```bash
@@ -50,17 +50,22 @@ ratelimiter:
       refill-period: 24h
 ```
 
-Refill is **stepwise, not a continuous drip**: at each period boundary the bucket gains
-`refill-tokens`, capped at `capacity`. Mid-period nothing accrues. In Bucket4j terms that is
-`refillIntervally`; `refillGreedy` would be the smooth drip.
+Refill is **proportional to elapsed time**, using Bucket4j's `refillGreedy`, capped at
+`capacity`. With 10 refill tokens per minute, one whole token becomes available every six
+seconds. Fractional progress is retained between checks. New buckets start full; refill is
+calculated on demand, with no background timer. Daily policies also refill gradually throughout
+the day rather than granting a batch once per day.
+
+After deploying this change to all instances, reset existing buckets to apply the new refill
+mode (see the resource reset procedure below). Existing stored buckets retain their old mode.
 
 The algorithm itself is [Bucket4j](https://bucket4j.com) (`bucket4j_jdk17-core`), with its state in
 the remote cache - see [Atomicity](#atomicity). Each policy becomes a `BucketConfiguration` with one
 `Bandwidth`, built once at startup in `core/RateLimiter`.
 
 `retryAfterMillis` is always the wait until the next refill that helps, on allowed and refused calls
-alike: when refused, until enough tokens are back; when allowed, until the next refill lands. It is
-never 0 (the spec's "0 otherwise" wording is out of date), so a caller can pace itself before it is
+alike: when refused, until enough tokens are back; when allowed, until the next whole token becomes available. It is
+never 0, so a caller can pace itself before it is
 refused. The `Retry-After` header is still sent on 429s only. Every value of `Resource` must have a policy - a missing one fails the startup
 bind, not the first request.
 

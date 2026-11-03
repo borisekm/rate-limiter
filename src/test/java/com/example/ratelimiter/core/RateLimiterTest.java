@@ -159,7 +159,7 @@ class RateLimiterTest {
             Decision decision = updated.check(SUBJECT, identifier, 20);
             assertThat(decision.allowed()).isTrue();
             assertThat(decision.remaining()).isZero();
-            assertThat(updated.check(SUBJECT, identifier).retryAfterMillis()).isEqualTo(5_000);
+            assertThat(updated.check(SUBJECT, identifier).retryAfterMillis()).isEqualTo(250);
         }
         assertThat(updated.check(DAILY, "a").remaining()).isEqualTo(99_998);
     }
@@ -283,69 +283,79 @@ class RateLimiterTest {
     }
 
     @Test
-    void refillsInWholePeriods() {
-        for (int i = 0; i < 15; i++) {
-            assertThat(limiter.check(SUBJECT, "ip").allowed()).isTrue();
+    void tenTokensPerMinuteAddsOneTokenEverySixSeconds() {
+        var policies = new java.util.EnumMap<>(POLICIES);
+        policies.put(SUBJECT, new ResourcePolicy(15, 10, Duration.ofMinutes(1)));
+        RateLimiter smooth = newInstance(new RateLimiterProperties(policies));
+        assertThat(smooth.check(SUBJECT, "ip", 15).allowed()).isTrue();
+
+        for (int i = 0; i < 10; i++) {
+            clock.advance(Duration.ofMillis(5_999));
+            Decision denied = smooth.check(SUBJECT, "ip");
+            assertThat(denied.allowed()).isFalse();
+            assertThat(denied.retryAfterMillis()).isEqualTo(1);
+            clock.advance(Duration.ofMillis(1));
+            Decision next = smooth.check(SUBJECT, "ip");
+            assertThat(next.allowed()).isTrue();
+            assertThat(next.remaining()).isZero();
         }
-        Decision denied = limiter.check(SUBJECT, "ip");
-        assertThat(denied.allowed()).isFalse();
-        assertThat(denied.remaining()).isZero();
-        assertThat(denied.retryAfterMillis()).isEqualTo(60_000);
-
-        clock.advance(Duration.ofSeconds(30));                    // mid-period: nothing yet
-        assertThat(limiter.check(SUBJECT, "ip").allowed()).isFalse();
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(30_000);
-
-        clock.advance(Duration.ofSeconds(30));                    // period boundary: +6 tokens
-        Decision after = limiter.check(SUBJECT, "ip");
-        assertThat(after.allowed()).isTrue();
-        assertThat(after.remaining()).isEqualTo(5);
-        assertThat(after.limit()).isEqualTo(15);
     }
 
     @Test
-    void allowedCallsReportTimeToTheNextRefill() {
-        Decision first = limiter.check(SUBJECT, "ip");
-        assertThat(first.allowed()).isTrue();
-        assertThat(first.retryAfterMillis()).isEqualTo(60_000);   // bucket created now, refill in a period
-
+    void fractionalProgressSurvivesChecksAndConsumption() {
+        limiter.check(SUBJECT, "ip", 15); // six per minute: one every ten seconds
         clock.advance(Duration.ofSeconds(15));
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(45_000);
-
-        clock.advance(Duration.ofMinutes(1));                              // t=75s: the 60s refill has landed,
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(45_000);  // next is at 120s
+        Decision next = limiter.check(SUBJECT, "ip");
+        assertThat(next.allowed()).isTrue();
+        assertThat(next.remaining()).isZero();
+        assertThat(next.retryAfterMillis()).isEqualTo(5_000);
+        clock.advance(Duration.ofSeconds(5));
+        assertThat(limiter.check(SUBJECT, "ip").allowed()).isTrue();
     }
 
     @Test
-    void retryAfterCountsDownWithinThePeriodWhileRefused() {
-        for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
+    void elapsedTimeAddsMultipleTokensWithoutWaitingForAWholePeriod() {
+        limiter.check(SUBJECT, "ip", 15);
+        clock.advance(Duration.ofSeconds(30));
+        Decision next = limiter.check(SUBJECT, "ip");
+        assertThat(next.allowed()).isTrue();
+        assertThat(next.remaining()).isEqualTo(2);
+        assertThat(next.limit()).isEqualTo(15);
+    }
 
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(60_000);
+    @Test
+    void allowedCallsReportTimeToTheNextWholeToken() {
+        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(10_000);
+        clock.advance(Duration.ofSeconds(5));
+        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(5_000);
+    }
+
+    @Test
+    void retryAfterCountsDownToTheNextTokenWhileRefused() {
+        limiter.check(SUBJECT, "ip", 15);
+        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(10_000);
         clock.advance(Duration.ofSeconds(6));
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(54_000);
-        clock.advance(Duration.ofSeconds(48));
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(6_000);
-
-        clock.advance(Duration.ofSeconds(6));                         // the boundary itself
+        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(4_000);
+        clock.advance(Duration.ofSeconds(4));
         Decision refilled = limiter.check(SUBJECT, "ip");
         assertThat(refilled.allowed()).isTrue();
-        assertThat(refilled.retryAfterMillis()).isEqualTo(60_000); // a fresh period starts
+        assertThat(refilled.retryAfterMillis()).isEqualTo(10_000);
     }
 
     @Test
-    void retryAfterSpansSeveralPeriodsWhenOnePeriodIsNotEnough() {
-        for (int i = 0; i < 15; i++) limiter.check(SUBJECT, "ip");
-
-        // 6 tokens per period, so a 13-token call has to wait out three of them.
-        assertThat(limiter.check(SUBJECT, "ip", 13).retryAfterMillis()).isEqualTo(3 * 60_000);
+    void multiTokenRequestWaitsForExactlyTheRequiredTokens() {
+        limiter.check(SUBJECT, "ip", 15);
+        assertThat(limiter.check(SUBJECT, "ip", 13).retryAfterMillis()).isEqualTo(130_000);
+        clock.advance(Duration.ofSeconds(129));
+        assertThat(limiter.check(SUBJECT, "ip", 13).retryAfterMillis()).isEqualTo(1_000);
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(limiter.check(SUBJECT, "ip", 13).allowed()).isTrue();
     }
 
     @Test
-    void retryAfterUsesEachResourcesOwnPeriod() {
-        assertThat(limiter.check(DAILY, "ip").retryAfterMillis())
-                .isEqualTo(Duration.ofDays(1).toMillis());
-        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis())
-                .isEqualTo(Duration.ofMinutes(1).toMillis());
+    void retryAfterUsesEachResourcesOwnRefillRate() {
+        assertThat(limiter.check(DAILY, "ip").retryAfterMillis()).isEqualTo(864);
+        assertThat(limiter.check(SUBJECT, "ip").retryAfterMillis()).isEqualTo(10_000);
     }
 
     @Test
@@ -375,7 +385,7 @@ class RateLimiterTest {
     }
 
     @Test
-    void dailyQuotaRefillsOncePerDay() {
+    void dailyPolicyRefillsProportionallyThroughoutTheDay() {
         Decision first = limiter.check(DAILY, "ip");
         assertThat(first.limit()).isEqualTo(100_000);
         assertThat(first.remaining()).isEqualTo(99_999);
@@ -383,9 +393,9 @@ class RateLimiterTest {
         limiter.check(DAILY, "ip", 99_999);
         Decision denied = limiter.check(DAILY, "ip");
         assertThat(denied.allowed()).isFalse();
-        assertThat(denied.retryAfterMillis()).isEqualTo(Duration.ofDays(1).toMillis());
+        assertThat(denied.retryAfterMillis()).isEqualTo(864);
 
-        clock.advance(Duration.ofDays(1));
+        clock.advance(Duration.ofMillis(864));
         assertThat(limiter.check(DAILY, "ip").allowed()).isTrue();
     }
 
@@ -483,7 +493,7 @@ class RateLimiterTest {
 
     @Test
     void lifespanCoversTheSlowestPolicysTimeToFull() {
-        // 15 tokens at 6 per minute is three periods; a day's quota refills in one day.
+        // Retention rounds up to whole periods conservatively; a daily policy takes one day.
         assertThat(POLICIES.get(SUBJECT).timeToFull()).isEqualTo(Duration.ofMinutes(3));
         assertThat(props.bucketLifespan()).isEqualTo(Duration.ofDays(1));
     }

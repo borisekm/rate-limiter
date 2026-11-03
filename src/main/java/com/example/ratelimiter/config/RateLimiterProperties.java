@@ -40,15 +40,15 @@ public record RateLimiterProperties(
 
     /**
      * @param capacity     max tokens the bucket holds (max burst); a fresh bucket starts full
-     * @param refillTokens tokens added at the end of every refill period
-     * @param refillPeriod how often {@code refillTokens} are added
+     * @param refillTokens tokens accrued proportionally over each refill period
+     * @param refillPeriod duration over which {@code refillTokens} accrue
      */
     public record ResourcePolicy(
             @Positive long capacity,
             @Positive long refillTokens,
             @NotNull Duration refillPeriod) {
 
-        /** Time for an empty bucket to become full again. */
+        /** Conservative time to full, rounded up to whole refill periods for cache retention. */
         public Duration timeToFull() {
             long periods = (capacity + refillTokens - 1) / refillTokens;
             return refillPeriod.multipliedBy(periods);

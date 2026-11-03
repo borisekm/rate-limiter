@@ -33,7 +33,7 @@ infinispan:
 # One policy per resource from the Resource enum in the OpenAPI spec. Keys must match the
 # enum's wire values exactly. Each policy applies per identifier: buckets are named
 # <resource>@<identifier>, e.g. subjectSearch@10.0.0.7 or maxCallsSess@org-42.
-# A bucket starts full and gains refill-tokens every refill-period, capped at capacity.
+# A bucket starts full; tokens accrue proportionally at refill-tokens / refill-period, capped at capacity.
 # Buckets are dropped once they would have refilled to capacity anyway (derived, not configured).
 # Every value can be set from the environment (RATELIMITER_RESOURCES_<RESOURCE>_<KEY>, no dashes);
 # the default after the colon is the local one. On Kubernetes they come from k8s/configmap.yaml.

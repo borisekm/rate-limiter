@@ -50,7 +50,7 @@ class RateLimitApiTest {
     @MockitoBean
     private RemoteCacheManager cacheManager;
 
-    private static final long MINUTE_MILLIS = Duration.ofMinutes(1).toMillis();
+    private static final long SUBJECT_TOKEN_MILLIS = Duration.ofSeconds(10).toMillis();
     private static final long DAY_MILLIS = Duration.ofDays(1).toMillis();
 
     @Autowired
@@ -140,7 +140,7 @@ class RateLimitApiTest {
                 .andExpect(jsonPath("$.limit").value(15))
                 .andExpect(jsonPath("$.remaining").value(14));
 
-        assertThat(retryAfterOf(result)).isBetween(1L, MINUTE_MILLIS);
+        assertThat(retryAfterOf(result)).isBetween(1L, SUBJECT_TOKEN_MILLIS);
     }
 
     @Test
@@ -183,7 +183,7 @@ class RateLimitApiTest {
                 .andExpect(jsonPath("$.allowed").value(false))
                 .andExpect(jsonPath("$.remaining").value(0));
 
-        assertThat(retryAfterOf(refused)).isBetween(1L, MINUTE_MILLIS);
+        assertThat(retryAfterOf(refused)).isBetween(1L, SUBJECT_TOKEN_MILLIS);
     }
 
     @Test
@@ -203,11 +203,11 @@ class RateLimitApiTest {
     }
 
     @Test
-    void dailyResourceReportsItsOwnPeriod() throws Exception {
+    void dailyResourceReportsTimeUntilTheNextToken() throws Exception {
         ResultActions result = check("maxCallsIp", UUID.randomUUID().toString())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.limit").value(100000));
 
-        assertThat(retryAfterOf(result)).isBetween(DAY_MILLIS - MINUTE_MILLIS, DAY_MILLIS);
+        assertThat(retryAfterOf(result)).isBetween(1L, DAY_MILLIS / 100_000);
     }
 }

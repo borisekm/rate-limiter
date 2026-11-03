@@ -175,15 +175,14 @@ public class RateLimiter {
     }
 
     /**
-     * {@code refillIntervally} is the stepwise refill this service is specified in: the whole
-     * {@code refill-tokens} arrive at each period boundary rather than dripping continuously
-     * ({@code refillGreedy}). A bucket starts full, which is Bucket4j's default initial tokens.
+     * Tokens accrue proportionally to elapsed time, capped at capacity. A whole token becomes
+     * available every refill-period / refill-tokens. New buckets start full.
      */
     private static BucketConfiguration bucketConfiguration(ResourcePolicy policy) {
         return BucketConfiguration.builder()
                 .addLimit(Bandwidth.builder()
                         .capacity(policy.capacity())
-                        .refillIntervally(policy.refillTokens(), policy.refillPeriod())
+                        .refillGreedy(policy.refillTokens(), policy.refillPeriod())
                         .build())
                 .build();
     }

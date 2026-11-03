@@ -119,4 +119,4 @@ components:
         retryAfterMillis:
           type: integer
           format: int64
-          description: When not allowed, how long until enough tokens are available; 0 otherwise
+          description: Wait in milliseconds until enough tokens are available when refused, or until the next whole token accrues when allowed
