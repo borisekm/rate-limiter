@@ -39,8 +39,10 @@ curl -s -X POST localhost:8051/v1/rate/check -H 'Content-Type: application/json'
 - **The algorithm is Bucket4j** (`bucket4j_jdk17-core` only), over a Hot Rod `RemoteCache` via
   `core/HotRodProxyManager`, a subclass of Bucket4j's `AbstractCompareAndSwapBasedProxyManager`.
   Bucket4j's `bucket4j_jdk17-infinispan` module is embedded-only (entry processor on a functional
-  map) and cannot work over Hot Rod. Refill is stepwise (`refillIntervally`, whole `refill-tokens` per
-  `refill-period`), not the smooth `refillGreedy` drip. Policies become `BucketConfiguration`s once at
+  map) and cannot work over Hot Rod. Refill is greedy (`refillGreedy`): `refill-tokens` accrue
+  proportionally over `refill-period`, one whole token every `refill-period / refill-tokens`. Buckets
+  stored under the old stepwise mode keep it until reset. The response field is `nextTokenInMillis`
+  (spec-owned; internally `Decision.retryAfterMillis`), also the source of the `Retry-After` header. Policies become `BucketConfiguration`s once at
   startup in `core/RateLimiter`.
 - **Every bucket write is a versioned compare-and-swap**: `getWithMetadata` for state + version, then
   `replaceWithVersion` (or `putIfAbsent` with `FORCE_RETURN_VALUE` - without the flag Hot Rod returns
@@ -117,7 +119,7 @@ semantics, not a stub.
 
 `RateLimiterTest` drives the limiter with `MutableClock` (the shared test clock in
 `src/test/java/com/example/ratelimiter`) - prefer extending it over mocking the cache. It covers exact
-capacity under concurrency, two clients sharing one bucket, stepwise refill, capping,
+capacity under concurrency, two clients sharing one bucket, proportional (greedy) refill, capping,
 per-resource/per-identifier isolation, the daily quota, retry-after in all its forms, the per-write
 lifespan, outages and recovery (including the throttled warning, which runs on the injected clock),
 both fallback directions with the real client against an address nothing listens on, and config

@@ -60,7 +60,7 @@ public class RateLimitApiDelegateImpl implements RateLimitApiDelegate {
                 .allowed(decision.allowed())
                 .limit(decision.limit())
                 .remaining(decision.remaining())
-                .retryAfterMillis(decision.retryAfterMillis());
+                .nextTokenInMillis(decision.retryAfterMillis());
 
         ResponseEntity.BodyBuilder response = decision.allowed()
                 ? ResponseEntity.ok()

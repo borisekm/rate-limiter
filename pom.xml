@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
@@ -20,8 +20,8 @@
     <properties>
         <java.version>25</java.version>
         <infinispan.version>16.2.3</infinispan.version>
-        <bucket4j.version>8.19.0</bucket4j.version>
-        <openapi-generator.version>7.14.0</openapi-generator.version>
+        <bucket4j.version>8.22.0</bucket4j.version>
+        <openapi-generator.version>7.26.0</openapi-generator.version>
         <jacoco.version>0.8.14</jacoco.version>
     </properties>
 

@@ -11,8 +11,8 @@ INFINISPAN_REMOTE_CLIENT_INTELLIGENCE=BASIC mvn spring-boot:run
 curl -s -X POST localhost:8051/v1/rate/check \
   -H 'Content-Type: application/json' \
   -d '{"resource":"subjectSearch","identifier":"10.0.0.7"}'
-# -> 200 {"allowed":true,"limit":15,"remaining":14,"retryAfterMillis":10000}
-# -> 429 {"allowed":false,"limit":15,"remaining":0,"retryAfterMillis":3413}   + Retry-After header
+# -> 200 {"allowed":true,"limit":15,"remaining":14,"nextTokenInMillis":10000}
+# -> 429 {"allowed":false,"limit":15,"remaining":0,"nextTokenInMillis":3413}   + Retry-After header
 ```
 
 ```bash
@@ -63,7 +63,7 @@ The algorithm itself is [Bucket4j](https://bucket4j.com) (`bucket4j_jdk17-core`)
 the remote cache - see [Atomicity](#atomicity). Each policy becomes a `BucketConfiguration` with one
 `Bandwidth`, built once at startup in `core/RateLimiter`.
 
-`retryAfterMillis` is always the wait until the next refill that helps, on allowed and refused calls
+`nextTokenInMillis` is always the wait until the next token that helps, on allowed and refused calls
 alike: when refused, until enough tokens are back; when allowed, until the next whole token becomes available. It is
 never 0, so a caller can pace itself before it is
 refused. The `Retry-After` header is still sent on 429s only. Every value of `Resource` must have a policy - a missing one fails the startup
@@ -137,7 +137,7 @@ environment sets deliberately - the code has no default:
 | value | answer |
 |---|---|
 | `allow` | fail open: 200, `allowed: true`, nothing counted |
-| `deny` | fail closed: 429, `allowed: false`, `retryAfterMillis: 1000` |
+| `deny` | fail closed: 429, `allowed: false`, `nextTokenInMillis: 1000` |
 
 Either way the response carries `X-RateLimit-Degraded: store-unavailable`, and the log gets a
 `Bucket store unavailable, allowing|denying all calls ...` warning with the cause - once when the outage

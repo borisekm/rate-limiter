@@ -28,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The wire contract, over the real context and the policies in application.yml. Time is not
- * controllable here, so this asserts the shape of {@code retryAfterMillis} - never 0, never past the
+ * controllable here, so this asserts the shape of {@code nextTokenInMillis} - never 0, never past the
  * resource's period - while {@code RateLimiterTest} pins the arithmetic down with a fake clock.
  *
  * <p>The starter's {@code RemoteCacheManager} is replaced by a mock that hands out
@@ -70,7 +70,7 @@ class RateLimitApiTest {
 
     private long retryAfterOf(ResultActions result) throws Exception {
         String json = result.andReturn().getResponse().getContentAsString();
-        return JsonPath.parse(json).read("$.retryAfterMillis", Long.class);
+        return JsonPath.parse(json).read("$.nextTokenInMillis", Long.class);
     }
 
     private ResultActions reset(String resource, String identifier) throws Exception {

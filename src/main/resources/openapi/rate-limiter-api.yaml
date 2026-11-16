@@ -104,7 +104,7 @@ components:
 
     CheckRateResponse:
       type: object
-      required: [allowed, limit, remaining, retryAfterMillis]
+      required: [allowed, limit, remaining, nextTokenInMillis]
       properties:
         allowed:
           type: boolean
@@ -116,7 +116,7 @@ components:
           type: integer
           format: int64
           description: Whole tokens left in the bucket after this call
-        retryAfterMillis:
+        nextTokenInMillis:
           type: integer
           format: int64
           description: Wait in milliseconds until enough tokens are available when refused, or until the next whole token accrues when allowed
